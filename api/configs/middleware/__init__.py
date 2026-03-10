@@ -154,7 +154,7 @@ class DatabaseConfig(BaseSettings):
         if self.DB_TYPE == "postgresql":
             return "postgresql"
         elif self.DB_TYPE == "kingbase":
-            return "kingbase8+psycopg2"
+            return "kingbase8+ksycopg2"
         else:
             return "mysql+pymysql"
 

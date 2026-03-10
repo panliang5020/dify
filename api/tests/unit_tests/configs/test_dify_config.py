@@ -175,8 +175,8 @@ def test_kingbase_db_type_config(monkeypatch: pytest.MonkeyPatch):
 
     config = DifyConfig()
 
-    assert config.SQLALCHEMY_DATABASE_URI_SCHEME == "kingbase8+psycopg2"
-    assert config.SQLALCHEMY_DATABASE_URI == "kingbase8+psycopg2://system:manager@localhost:54321/dify"
+    assert config.SQLALCHEMY_DATABASE_URI_SCHEME == "kingbase8+ksycopg2"
+    assert config.SQLALCHEMY_DATABASE_URI == "kingbase8+ksycopg2://system:manager@localhost:54321/dify"
     # KingbaseES is PostgreSQL-compatible: timezone connect_arg must be present
     engine_options = config.SQLALCHEMY_ENGINE_OPTIONS
     assert engine_options["connect_args"] == {"options": "-c timezone=UTC"}
