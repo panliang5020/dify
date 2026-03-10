@@ -21,9 +21,10 @@
    - 5.6 [知识库分段关键词搜索](#56-知识库分段关键词搜索)
 6. [单元测试](#6-单元测试)
 7. [数据库迁移（Alembic）注意事项](#7-数据库迁移alembic注意事项)
-8. [各数据库类型功能对照表](#8-各数据库类型功能对照表)
-9. [常见问题](#9-常见问题)
-10. [变更文件速览](#10-变更文件速览)
+8. [Docker Compose 部署配置](#8-docker-compose-部署配置)
+9. [各数据库类型功能对照表](#9-各数据库类型功能对照表)
+10. [常见问题](#10-常见问题)
+11. [变更文件速览](#11-变更文件速览)
 
 ---
 
@@ -526,7 +527,86 @@ DB_TYPE=kingbase ... flask db current
 
 ---
 
-## 8. 各数据库类型功能对照表
+## 8. Docker Compose 部署配置
+
+**文件**：`docker/docker-compose.yaml`
+
+为了让 KingbaseES 能够通过 Docker Compose 与 Dify 一起部署，需要对 `docker/docker-compose.yaml` 进行以下修改。
+
+### 8.1 新增 `db_kingbase` 服务
+
+在 `db_mysql` 服务之后、`redis` 服务之前新增如下 `db_kingbase` 服务定义：
+
+```yaml
+  # The KingbaseES (人大金仓) database.
+  # KingbaseES is a PostgreSQL-compatible database. The official Docker image must be
+  # obtained from the KingbaseES vendor (https://www.kingbase.com.cn/).
+  db_kingbase:
+    image: ${KINGBASE_IMAGE:-kingbase/kingbase-ee:v008r006c008b0014}
+    profiles:
+      - kingbase
+    restart: always
+    environment:
+      SYSTEM_PASSWORD: ${DB_PASSWORD:-difyai123456}
+      DB: ${DB_DATABASE:-dify}
+    volumes:
+      - ./volumes/kingbase/data:/home/kingbase/userdata
+    ports:
+      - "${DB_PORT:-54321}:54321"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ksql -U ${DB_USERNAME:-system} -d ${DB_DATABASE:-dify} -c 'SELECT 1;' > /dev/null 2>&1 || exit 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+```
+
+> **说明**：
+> - KingbaseES 的 Docker 镜像 **不在 Docker Hub 公共仓库**，需从 [人大金仓官网](https://www.kingbase.com.cn/) 获取并推送到本地镜像仓库后使用。
+> - 可通过环境变量 `KINGBASE_IMAGE` 覆盖默认镜像地址，以适配私有镜像仓库。
+> - KingbaseES 默认端口为 `54321`，通过 `DB_PORT` 可以自定义宿主机映射端口。
+> - 数据目录挂载到 `./volumes/kingbase/data`。
+
+### 8.2 各服务 `depends_on` 新增 `db_kingbase`
+
+在 `api`、`worker`、`worker_beat` 以及 `plugin_daemon` 这四个服务的 `depends_on` 节中，均添加：
+
+```yaml
+      db_kingbase:
+        condition: service_healthy
+        required: false
+```
+
+`required: false` 确保在未启用 `kingbase` profile 时，这些服务仍可正常启动。
+
+### 8.3 启动方式
+
+使用 KingbaseES 时，通过 `--profile kingbase` 激活对应服务，并在 `.env` 文件中配置数据库连接参数：
+
+```bash
+# 在 docker/ 目录下执行
+DB_TYPE=kingbase \
+DB_HOST=db_kingbase \
+DB_PORT=54321 \
+DB_USERNAME=system \
+DB_PASSWORD=manager \
+DB_DATABASE=dify \
+KINGBASE_IMAGE=your-registry/kingbase-ee:v008r006c008b0014 \
+docker compose --profile kingbase up -d
+```
+
+或将以上变量写入 `docker/.env` 文件后执行：
+
+```bash
+docker compose --profile kingbase up -d
+```
+
+---
+
+## 9. 各数据库类型功能对照表
 
 | 功能点 | PostgreSQL | KingbaseES | MySQL / OceanBase / SeekDB |
 |--------|:----------:|:----------:|:--------------------------:|
@@ -548,7 +628,7 @@ DB_TYPE=kingbase ... flask db current
 
 ---
 
-## 9. 常见问题
+## 10. 常见问题
 
 **Q1：为什么 `DB_TYPE` 用 `kingbase`，而 SQLAlchemy 方言名是 `kingbase8`？**
 
@@ -576,7 +656,7 @@ DB_TYPE=kingbase ... flask db current
 
 ---
 
-## 10. 变更文件速览
+## 11. 变更文件速览
 
 | 文件路径 | 改动类型 | 关键内容 |
 |---------|---------|---------|
@@ -587,6 +667,7 @@ DB_TYPE=kingbase ... flask db current
 | `api/services/workflow_draft_variable_service.py` | 修改 | 批量 Upsert 判断条件新增 `kingbase8` 方言（复用 `pg_insert`） |
 | `api/controllers/console/datasets/datasets_segments.py` | 修改 | 知识库分段关键词搜索新增 `kingbase8` 分支（复用 JSONB 路径查询） |
 | `api/tests/unit_tests/configs/test_dify_config.py` | 修改 | 新增 `test_kingbase_db_type_config` 和 `test_kingbase_db_extras_options_merging` 测试用例 |
+| `docker/docker-compose.yaml` | 修改 | 新增 `db_kingbase` 服务（`kingbase` profile）；在 `api`、`worker`、`worker_beat`、`plugin_daemon` 的 `depends_on` 中新增 `db_kingbase` |
 
 ---
 
