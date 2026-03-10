@@ -19,7 +19,7 @@ class StringUUID(TypeDecorator[uuid.UUID | str | None]):
     def process_bind_param(self, value: uuid.UUID | str | None, dialect: Dialect) -> str | None:
         if value is None:
             return value
-        elif dialect.name in ["postgresql", "mysql"]:
+        elif dialect.name in ["postgresql", "mysql", "kingbase8"]:
             return str(value)
         else:
             if isinstance(value, uuid.UUID):
@@ -27,7 +27,7 @@ class StringUUID(TypeDecorator[uuid.UUID | str | None]):
             return value
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
-        if dialect.name == "postgresql":
+        if dialect.name in ["postgresql", "kingbase8"]:
             return dialect.type_descriptor(UUID())
         else:
             return dialect.type_descriptor(CHAR(36))
@@ -48,7 +48,7 @@ class LongText(TypeDecorator[str | None]):
         return value
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
-        if dialect.name == "postgresql":
+        if dialect.name in ["postgresql", "kingbase8"]:
             return dialect.type_descriptor(TEXT())
         elif dialect.name == "mysql":
             return dialect.type_descriptor(LONGTEXT())
@@ -71,7 +71,7 @@ class BinaryData(TypeDecorator[bytes | None]):
         return value
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
-        if dialect.name == "postgresql":
+        if dialect.name in ["postgresql", "kingbase8"]:
             return dialect.type_descriptor(BYTEA())
         elif dialect.name == "mysql":
             return dialect.type_descriptor(LONGBLOB())
@@ -93,7 +93,7 @@ class AdjustedJSON(TypeDecorator[dict | list | None]):
         super().__init__()
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
-        if dialect.name == "postgresql":
+        if dialect.name in ["postgresql", "kingbase8"]:
             if self.astext_type:
                 return dialect.type_descriptor(JSONB(astext_type=self.astext_type))
             else:
@@ -157,7 +157,7 @@ class EnumText(TypeDecorator[_E | None], Generic[_E]):
 
 def adjusted_json_index(index_name, column_name):
     index_name = index_name or f"{column_name}_idx"
-    if dify_config.DB_TYPE == "postgresql":
+    if dify_config.DB_TYPE in ["postgresql", "kingbase"]:
         return sa.Index(index_name, column_name, postgresql_using="gin")
     else:
         return None

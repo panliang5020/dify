@@ -108,8 +108,8 @@ class KeywordStoreConfig(BaseSettings):
 
 class DatabaseConfig(BaseSettings):
     # Database type selector
-    DB_TYPE: Literal["postgresql", "mysql", "oceanbase", "seekdb"] = Field(
-        description="Database type to use. OceanBase is MySQL-compatible.",
+    DB_TYPE: Literal["postgresql", "mysql", "oceanbase", "seekdb", "kingbase"] = Field(
+        description="Database type to use. OceanBase and SeekDB are MySQL-compatible. KingbaseES is PostgreSQL-compatible.",
         default="postgresql",
     )
 
@@ -151,7 +151,12 @@ class DatabaseConfig(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def SQLALCHEMY_DATABASE_URI_SCHEME(self) -> str:
-        return "postgresql" if self.DB_TYPE == "postgresql" else "mysql+pymysql"
+        if self.DB_TYPE == "postgresql":
+            return "postgresql"
+        elif self.DB_TYPE == "kingbase":
+            return "kingbase8+psycopg2"
+        else:
+            return "mysql+pymysql"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -213,8 +218,8 @@ class DatabaseConfig(BaseSettings):
         db_extras_dict = dict(parse_qsl(self.DB_EXTRAS))
         options = db_extras_dict.get("options", "")
         connect_args = {}
-        # Use the dynamic SQLALCHEMY_DATABASE_URI_SCHEME property
-        if self.SQLALCHEMY_DATABASE_URI_SCHEME.startswith("postgresql"):
+        # PostgreSQL and KingbaseES (PostgreSQL-compatible) both use the same timezone option
+        if self.SQLALCHEMY_DATABASE_URI_SCHEME.startswith(("postgresql", "kingbase8")):
             timezone_opt = "-c timezone=UTC"
             if options:
                 merged_options = f"{options} {timezone_opt}"

@@ -236,7 +236,7 @@ class ConversationService:
                         f"%{escaped_variable_name}%", escape="\\"
                     )
                 )
-            elif dify_config.DB_TYPE == "postgresql":
+            elif dify_config.DB_TYPE in ["postgresql", "kingbase"]:
                 stmt = stmt.where(
                     func.json_extract_path_text(ConversationVariable.data, "name").ilike(
                         f"%{escaped_variable_name}%", escape="\\"

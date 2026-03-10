@@ -164,6 +164,42 @@ def test_db_extras_options_merging(monkeypatch: pytest.MonkeyPatch):
     assert "timezone=UTC" in options
 
 
+def test_kingbase_db_type_config(monkeypatch: pytest.MonkeyPatch):
+    """Test that DB_TYPE=kingbase produces correct URI scheme and engine options."""
+    monkeypatch.setenv("DB_TYPE", "kingbase")
+    monkeypatch.setenv("DB_USERNAME", "system")
+    monkeypatch.setenv("DB_PASSWORD", "manager")
+    monkeypatch.setenv("DB_HOST", "localhost")
+    monkeypatch.setenv("DB_PORT", "54321")
+    monkeypatch.setenv("DB_DATABASE", "dify")
+
+    config = DifyConfig()
+
+    assert config.SQLALCHEMY_DATABASE_URI_SCHEME == "kingbase8+psycopg2"
+    assert config.SQLALCHEMY_DATABASE_URI == "kingbase8+psycopg2://system:manager@localhost:54321/dify"
+    # KingbaseES is PostgreSQL-compatible: timezone connect_arg must be present
+    engine_options = config.SQLALCHEMY_ENGINE_OPTIONS
+    assert engine_options["connect_args"] == {"options": "-c timezone=UTC"}
+
+
+def test_kingbase_db_extras_options_merging(monkeypatch: pytest.MonkeyPatch):
+    """Test that DB_EXTRAS options are properly merged for KingbaseES."""
+    monkeypatch.setenv("DB_TYPE", "kingbase")
+    monkeypatch.setenv("DB_USERNAME", "system")
+    monkeypatch.setenv("DB_PASSWORD", "manager")
+    monkeypatch.setenv("DB_HOST", "localhost")
+    monkeypatch.setenv("DB_PORT", "54321")
+    monkeypatch.setenv("DB_DATABASE", "dify")
+    monkeypatch.setenv("DB_EXTRAS", "options=-c search_path=myschema")
+
+    config = DifyConfig()
+
+    engine_options = config.SQLALCHEMY_ENGINE_OPTIONS
+    options = engine_options["connect_args"]["options"]
+    assert "search_path=myschema" in options
+    assert "timezone=UTC" in options
+
+
 def test_pubsub_redis_url_default(monkeypatch: pytest.MonkeyPatch):
     os.environ.clear()
 
