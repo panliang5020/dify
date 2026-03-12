@@ -22,6 +22,7 @@
 6. [单元测试](#6-单元测试)
 7. [数据库迁移（Alembic）注意事项](#7-数据库迁移alembic注意事项)
 8. [Docker Compose 部署配置](#8-docker-compose-部署配置)
+   - 8.4 [单容器快速验证（连通性测试）](#84-单容器快速验证连通性测试)
 9. [各数据库类型功能对照表](#9-各数据库类型功能对照表)
 10. [常见问题](#10-常见问题)
 11. [变更文件速览](#11-变更文件速览)
@@ -643,6 +644,115 @@ docker compose --profile kingbase up -d
 
 ```bash
 docker compose --profile kingbase up -d
+```
+
+### 8.4 单容器快速验证（连通性测试）
+
+在将 KingbaseES 接入 Dify 完整环境之前，可以先用一条 `docker run` 命令启动一个**仅含数据库**的单容器，快速验证镜像可用性和网络连通性。这与 PostgreSQL 的验证流程完全对应：
+
+**PostgreSQL 对比参考**
+
+```bash
+# PostgreSQL 单容器启动（官方 Docker Hub 镜像，无需额外获取）
+docker run -d \
+  --name dify-postgres-test \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=difyai123456 \
+  -e POSTGRES_DB=dify \
+  -p 5432:5432 \
+  postgres:15-alpine
+```
+
+**KingbaseES 单容器启动**
+
+```bash
+# KingbaseES 单容器启动
+# 注意：镜像需从人大金仓官方获取（https://www.kingbase.com.cn/），不在 Docker Hub 公共仓库。
+# 若使用私有镜像仓库，将 kingbase/kingbase-ee:v008r006c008b0014 替换为实际地址。
+docker run -d \
+  --name dify-kingbase-test \
+  -e SYSTEM_PASSWORD=difyai123456 \
+  -e DB=dify \
+  -p 54321:54321 \
+  kingbase/kingbase-ee:v008r006c008b0014
+```
+
+> **参数说明**：
+> | 参数 | KingbaseES | PostgreSQL 对应参数 |
+> |------|-----------|-------------------|
+> | `SYSTEM_PASSWORD` | 超级用户 `system` 的密码 | `POSTGRES_PASSWORD` |
+> | `DB` | 自动创建的数据库名 | `POSTGRES_DB` |
+> | 端口 | `54321`（KingbaseES 默认） | `5432`（PostgreSQL 默认） |
+
+**等待容器就绪**
+
+```bash
+# 持续检查健康状态，直到 healthy（约 30～90 秒）
+docker inspect --format='{{.State.Health.Status}}' dify-kingbase-test
+
+# 或直接在容器内执行 SQL 验证
+docker exec dify-kingbase-test ksql -U system -d dify -c "SELECT VERSION();"
+```
+
+**方式一：Python DBAPI 直连验证（官方测试脚本风格）**
+
+适合验证 `ksycopg2` 驱动安装是否正确：
+
+```python
+import ksycopg2
+
+conn = ksycopg2.connect(
+    host="localhost",
+    port=54321,
+    user="system",
+    password="difyai123456",
+    database="dify",
+)
+cur = conn.cursor()
+cur.execute("SELECT VERSION();")
+print("KingbaseES version:", cur.fetchone()[0])
+conn.close()
+```
+
+**方式二：SQLAlchemy 连接验证（Dify 生产用法）**
+
+适合验证 `kingbase8` 方言包安装是否正确，与 Dify 实际使用方式完全一致：
+
+```python
+from sqlalchemy import create_engine, text
+
+engine = create_engine(
+    "kingbase8+ksycopg2://system:difyai123456@localhost:54321/dify",
+    connect_args={"options": "-c timezone=UTC"},
+)
+with engine.connect() as conn:
+    version = conn.execute(text("SELECT VERSION()")).scalar()
+    print("KingbaseES version:", version)
+```
+
+两种方式均输出类似：
+
+```
+KingbaseES version: KingbaseES V8 (KingbaseES V008R006C008B0014 ...) on x86_64-pc-linux-gnu ...
+```
+
+**与 Dify 环境变量对应关系**
+
+单容器测试通过后，将以下参数填入 Dify `.env` 即可直接接入：
+
+```dotenv
+DB_TYPE=kingbase
+DB_HOST=localhost        # Docker Compose 部署时改为 db_kingbase
+DB_PORT=54321
+DB_USERNAME=system
+DB_PASSWORD=difyai123456
+DB_DATABASE=dify
+```
+
+**清理测试容器**
+
+```bash
+docker stop dify-kingbase-test && docker rm dify-kingbase-test
 ```
 
 ---
