@@ -754,6 +754,9 @@ services:
       seekdb:
         condition: service_healthy
         required: false
+      db_kingbase:
+        condition: service_healthy
+        required: false
       redis:
         condition: service_started
     volumes:
@@ -793,6 +796,9 @@ services:
       seekdb:
         condition: service_healthy
         required: false
+      db_kingbase:
+        condition: service_healthy
+        required: false
       redis:
         condition: service_started
     volumes:
@@ -825,6 +831,9 @@ services:
         condition: service_healthy
         required: false
       seekdb:
+        condition: service_healthy
+        required: false
+      db_kingbase:
         condition: service_healthy
         required: false
       redis:
@@ -927,6 +936,31 @@ services:
       interval: 1s
       timeout: 3s
       retries: 30
+
+  # The KingbaseES database (PostgreSQL-compatible).
+  db_kingbase:
+    image: registry.cn-hangzhou.aliyuncs.com/kingbase/kingbasees:v8r6c8b0014_x86_single
+    profiles:
+      - kingbase
+    restart: always
+    privileged: true
+    environment:
+      DB: ${DB_DATABASE:-dify}
+      USER: ${DB_USERNAME:-system}
+      PASSWORD: ${DB_PASSWORD:-difyai123456}
+    ports:
+      - "${DB_PORT:-54321}:54321"
+    volumes:
+      - ./volumes/db/kingbase:/home/kingbase/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ksql -U ${DB_USERNAME:-system} -d ${DB_DATABASE:-dify} -c 'SELECT 1' > /dev/null 2>&1 || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
   # The redis cache.
   redis:
@@ -1038,6 +1072,9 @@ services:
         condition: service_healthy
         required: false
       seekdb:
+        condition: service_healthy
+        required: false
+      db_kingbase:
         condition: service_healthy
         required: false
 

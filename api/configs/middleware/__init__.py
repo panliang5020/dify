@@ -109,8 +109,8 @@ class KeywordStoreConfig(BaseSettings):
 
 class DatabaseConfig(BaseSettings):
     # Database type selector
-    DB_TYPE: Literal["postgresql", "mysql", "oceanbase", "seekdb"] = Field(
-        description="Database type to use. OceanBase is MySQL-compatible.",
+    DB_TYPE: Literal["postgresql", "mysql", "oceanbase", "seekdb", "kingbase"] = Field(
+        description="Database type to use. OceanBase is MySQL-compatible. KingbaseES is PostgreSQL-compatible.",
         default="postgresql",
     )
 
@@ -152,7 +152,7 @@ class DatabaseConfig(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def SQLALCHEMY_DATABASE_URI_SCHEME(self) -> str:
-        return "postgresql" if self.DB_TYPE == "postgresql" else "mysql+pymysql"
+        return "postgresql" if self.DB_TYPE in ("postgresql", "kingbase") else "mysql+pymysql"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

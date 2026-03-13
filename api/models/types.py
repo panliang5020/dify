@@ -157,7 +157,7 @@ class EnumText(TypeDecorator[_E | None], Generic[_E]):
 
 def adjusted_json_index(index_name, column_name):
     index_name = index_name or f"{column_name}_idx"
-    if dify_config.DB_TYPE == "postgresql":
+    if dify_config.DB_TYPE in ("postgresql", "kingbase"):
         return sa.Index(index_name, column_name, postgresql_using="gin")
     else:
         return None
