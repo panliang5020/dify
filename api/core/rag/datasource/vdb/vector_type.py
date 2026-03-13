@@ -34,3 +34,4 @@ class VectorType(StrEnum):
     MATRIXONE = "matrixone"
     CLICKZETTA = "clickzetta"
     IRIS = "iris"
+    KINGBASE = "kingbase"

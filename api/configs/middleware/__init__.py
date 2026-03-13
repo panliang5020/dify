@@ -28,6 +28,7 @@ from .vdb.couchbase_config import CouchbaseConfig
 from .vdb.elasticsearch_config import ElasticsearchConfig
 from .vdb.huawei_cloud_config import HuaweiCloudConfig
 from .vdb.iris_config import IrisVectorConfig
+from .vdb.kingbase_config import KingbaseVectorConfig
 from .vdb.lindorm_config import LindormConfig
 from .vdb.matrixone_config import MatrixoneConfig
 from .vdb.milvus_config import MilvusConfig
@@ -349,6 +350,7 @@ class MiddlewareConfig(
     ClickzettaConfig,
     HuaweiCloudConfig,
     IrisVectorConfig,
+    KingbaseVectorConfig,
     MilvusConfig,
     AlibabaCloudMySQLConfig,
     MyScaleConfig,
