@@ -28,6 +28,7 @@ from .vdb.couchbase_config import CouchbaseConfig
 from .vdb.elasticsearch_config import ElasticsearchConfig
 from .vdb.huawei_cloud_config import HuaweiCloudConfig
 from .vdb.iris_config import IrisVectorConfig
+from .vdb.kingbase_config import KingbaseVectorConfig
 from .vdb.lindorm_config import LindormConfig
 from .vdb.matrixone_config import MatrixoneConfig
 from .vdb.milvus_config import MilvusConfig
@@ -108,8 +109,8 @@ class KeywordStoreConfig(BaseSettings):
 
 class DatabaseConfig(BaseSettings):
     # Database type selector
-    DB_TYPE: Literal["postgresql", "mysql", "oceanbase", "seekdb"] = Field(
-        description="Database type to use. OceanBase is MySQL-compatible.",
+    DB_TYPE: Literal["postgresql", "mysql", "oceanbase", "seekdb", "kingbase"] = Field(
+        description="Database type to use. OceanBase is MySQL-compatible. KingbaseES is PostgreSQL-compatible.",
         default="postgresql",
     )
 
@@ -151,7 +152,7 @@ class DatabaseConfig(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def SQLALCHEMY_DATABASE_URI_SCHEME(self) -> str:
-        return "postgresql" if self.DB_TYPE == "postgresql" else "mysql+pymysql"
+        return "postgresql" if self.DB_TYPE in ("postgresql", "kingbase") else "mysql+pymysql"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -349,6 +350,7 @@ class MiddlewareConfig(
     ClickzettaConfig,
     HuaweiCloudConfig,
     IrisVectorConfig,
+    KingbaseVectorConfig,
     MilvusConfig,
     AlibabaCloudMySQLConfig,
     MyScaleConfig,

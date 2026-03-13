@@ -231,6 +231,13 @@ x-shared-env: &shared-api-worker-env
   VASTBASE_DATABASE: ${VASTBASE_DATABASE:-dify}
   VASTBASE_MIN_CONNECTION: ${VASTBASE_MIN_CONNECTION:-1}
   VASTBASE_MAX_CONNECTION: ${VASTBASE_MAX_CONNECTION:-5}
+  KINGBASE_HOST: ${KINGBASE_HOST:-kingbase}
+  KINGBASE_PORT: ${KINGBASE_PORT:-54321}
+  KINGBASE_USER: ${KINGBASE_USER:-system}
+  KINGBASE_PASSWORD: ${KINGBASE_PASSWORD:-Difyai123456}
+  KINGBASE_DATABASE: ${KINGBASE_DATABASE:-dify}
+  KINGBASE_MIN_CONNECTION: ${KINGBASE_MIN_CONNECTION:-1}
+  KINGBASE_MAX_CONNECTION: ${KINGBASE_MAX_CONNECTION:-5}
   PGVECTO_RS_HOST: ${PGVECTO_RS_HOST:-pgvecto-rs}
   PGVECTO_RS_PORT: ${PGVECTO_RS_PORT:-5432}
   PGVECTO_RS_USER: ${PGVECTO_RS_USER:-postgres}
@@ -747,6 +754,9 @@ services:
       seekdb:
         condition: service_healthy
         required: false
+      db_kingbase:
+        condition: service_healthy
+        required: false
       redis:
         condition: service_started
     volumes:
@@ -786,6 +796,9 @@ services:
       seekdb:
         condition: service_healthy
         required: false
+      db_kingbase:
+        condition: service_healthy
+        required: false
       redis:
         condition: service_started
     volumes:
@@ -818,6 +831,9 @@ services:
         condition: service_healthy
         required: false
       seekdb:
+        condition: service_healthy
+        required: false
+      db_kingbase:
         condition: service_healthy
         required: false
       redis:
@@ -920,6 +936,31 @@ services:
       interval: 1s
       timeout: 3s
       retries: 30
+
+  # The KingbaseES database (PostgreSQL-compatible).
+  db_kingbase:
+    image: registry.cn-hangzhou.aliyuncs.com/kingbase/kingbasees:v8r6c8b0014_x86_single
+    profiles:
+      - kingbase
+    restart: always
+    privileged: true
+    environment:
+      DB: ${DB_DATABASE:-dify}
+      USER: ${DB_USERNAME:-system}
+      PASSWORD: ${DB_PASSWORD:-difyai123456}
+    ports:
+      - "${DB_PORT:-54321}:54321"
+    volumes:
+      - ./volumes/db/kingbase:/home/kingbase/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ksql -U ${DB_USERNAME:-system} -d ${DB_DATABASE:-dify} -c 'SELECT 1' > /dev/null 2>&1 || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
   # The redis cache.
   redis:
@@ -1031,6 +1072,9 @@ services:
         condition: service_healthy
         required: false
       seekdb:
+        condition: service_healthy
+        required: false
+      db_kingbase:
         condition: service_healthy
         required: false
 
@@ -1309,6 +1353,27 @@ services:
       interval: 1s
       timeout: 3s
       retries: 30
+
+  # KingbaseES vector database. Get developer image from https://www.kingbase.com.cn/
+  kingbase:
+    image: registry.cn-hangzhou.aliyuncs.com/kingbase/kingbasees:v8r6c8b0014_x86_single
+    profiles:
+      - kingbase
+    restart: always
+    privileged: true
+    environment:
+      DB: ${KINGBASE_DATABASE:-dify}
+      USER: ${KINGBASE_USER:-system}
+      PASSWORD: ${KINGBASE_PASSWORD:-Difyai123456}
+    ports:
+      - "${KINGBASE_PORT:-54321}:54321"
+    volumes:
+      - ./volumes/kingbase/data:/home/kingbase/data
+    healthcheck:
+      test: ["CMD-SHELL", "ksql -U ${KINGBASE_USER:-system} -d ${KINGBASE_DATABASE:-dify} -c 'SELECT 1' > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
   # pgvecto-rs vector store
   pgvecto-rs:
