@@ -59,9 +59,14 @@ class WeaveDataTrace(BaseTraceInstance):
             logger.error("Failed to login to Weights & Biases with the provided API key")
             raise ValueError("Weave login failed")
 
-        # Then initialize weave client
+        # Then initialize weave client.
+        # Disable disk caching to mitigate CVE-2025-69872: diskcache <=5.6.3 uses
+        # pickle by default, which allows arbitrary code execution if an attacker
+        # can write to the cache directory.  Since no patched diskcache version
+        # exists on PyPI, we disable the feature entirely via the weave setting.
         self.weave_client = weave.init(
-            project_name=(f"{self.entity}/{self.project_name}" if self.entity else self.project_name)
+            project_name=(f"{self.entity}/{self.project_name}" if self.entity else self.project_name),
+            settings={"use_server_cache": False},
         )
         self.file_base_url = os.getenv("FILES_URL", "http://127.0.0.1:5001")
         self.calls: dict[str, Any] = {}
