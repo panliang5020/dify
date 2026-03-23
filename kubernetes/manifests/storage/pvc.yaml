@@ -1,0 +1,130 @@
+---
+# StorageClass for SSD-backed persistent volumes (cloud provider specific)
+# For AWS EKS, use: gp3
+# For GKE, use: premium-rwo
+# For AKS, use: managed-premium
+# For on-premise, configure your storage provider accordingly
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dify-ssd
+  labels:
+    app.kubernetes.io/name: dify
+provisioner: kubernetes.io/no-provisioner  # Replace with your cloud provider's provisioner
+# AWS EKS example:
+# provisioner: ebs.csi.aws.com
+# parameters:
+#   type: gp3
+#   encrypted: "true"
+# GKE example:
+# provisioner: pd.csi.storage.gke.io
+# parameters:
+#   type: pd-ssd
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# PVC for PostgreSQL data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dify-postgres-pvc
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: postgres
+  annotations:
+    description: "PostgreSQL data for Dify application"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: dify-ssd
+---
+# PVC for Redis data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dify-redis-pvc
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: redis
+  annotations:
+    description: "Redis persistence data for Dify"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: dify-ssd
+---
+# PVC for Weaviate vector database
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dify-weaviate-pvc
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: weaviate
+  annotations:
+    description: "Weaviate vector database storage"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: dify-ssd
+---
+# PVC for API application storage (fallback if not using S3)
+# IMPORTANT: This PVC uses ReadWriteMany for multi-pod access (API + Worker).
+# The 'dify-ssd' StorageClass defined above does NOT support ReadWriteMany.
+# You must do ONE of the following:
+#   Option A (Recommended): Use S3/OSS object storage and remove this PVC entirely.
+#                           Set STORAGE_TYPE=s3 in the ConfigMap and remove the
+#                           volumeMounts from API and Worker Deployments.
+#   Option B: Replace 'dify-ssd' with an RWX-capable StorageClass such as:
+#             - AWS EFS: provisioner=efs.csi.aws.com
+#             - NFS: provisioner=nfs.csi.k8s.io
+#             - Alibaba Cloud NAS: provisioner=nasplugin.csi.alibabacloud.com
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dify-api-storage-pvc
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: api
+  annotations:
+    description: "API local file storage for Dify (use S3 in production instead)"
+spec:
+  accessModes:
+    - ReadWriteMany  # Shared access for multiple API/worker pods - requires RWX StorageClass
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: dify-ssd  # MUST be replaced with an RWX-capable StorageClass (NFS/EFS)
+---
+# PVC for Plugin Daemon storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dify-plugin-daemon-pvc
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: plugin-daemon
+  annotations:
+    description: "Plugin daemon storage for installed plugins"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: dify-ssd

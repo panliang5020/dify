@@ -1,0 +1,138 @@
+---
+# Ingress for Dify application using Nginx Ingress Controller
+# Prerequisites: Install Nginx Ingress Controller and cert-manager
+# kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml
+# kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dify-ingress
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: ingress
+  annotations:
+    # Nginx Ingress annotations
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    # SSL/TLS via cert-manager
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Rate limiting (optional)
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - REPLACE-YOUR-DOMAIN.example.com
+        - api.REPLACE-YOUR-DOMAIN.example.com
+      secretName: dify-tls
+  rules:
+    # API backend routes
+    - host: REPLACE-YOUR-DOMAIN.example.com
+      http:
+        paths:
+          - path: /console/api
+            pathType: Prefix
+            backend:
+              service:
+                name: dify-api
+                port:
+                  number: 5001
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: dify-api
+                port:
+                  number: 5001
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: dify-api
+                port:
+                  number: 5001
+          - path: /files
+            pathType: Prefix
+            backend:
+              service:
+                name: dify-api
+                port:
+                  number: 5001
+          # Frontend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dify-web
+                port:
+                  number: 3000
+---
+# cert-manager ClusterIssuer for Let's Encrypt (production)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: cert-manager
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: REPLACE-WITH-YOUR-EMAIL@example.com  # Replace with your actual email for Let's Encrypt notifications
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+---
+# cert-manager ClusterIssuer for Let's Encrypt (staging - for testing)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: cert-manager
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: REPLACE-WITH-YOUR-EMAIL@example.com  # Replace with your actual email
+    privateKeySecretRef:
+      name: letsencrypt-staging
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+---
+# Certificate resource (cert-manager manages TLS)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dify-certificate
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: certificate
+spec:
+  secretName: dify-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - REPLACE-YOUR-DOMAIN.example.com
+    - api.REPLACE-YOUR-DOMAIN.example.com
+  duration: 2160h  # 90 days
+  renewBefore: 360h  # 15 days before expiry

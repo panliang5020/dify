@@ -1,0 +1,840 @@
+---
+# Dify API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dify-api
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "1.13.0"
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dify-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: dify-api
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: api
+      annotations:
+        # Force pod restart when configmap/secret changes.
+        # Update this value whenever you apply ConfigMap/Secret changes:
+        #   kubectl patch deployment dify-api -n dify -p \
+        #     "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"config-hash\":\"$(date +%s)\"}}}}}"
+        config-hash: "update-this-value-on-each-config-change"
+    spec:
+      serviceAccountName: dify-api
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # Ensure pods spread across nodes for HA
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: dify-api
+      initContainers:
+        # Wait for PostgreSQL to be ready before starting API
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z dify-postgres 5432; do
+                echo "Waiting for PostgreSQL to be ready..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready!"
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+        # Wait for Redis to be ready
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z dify-redis 6379; do
+                echo "Waiting for Redis to be ready..."
+                sleep 2
+              done
+              echo "Redis is ready!"
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+      containers:
+        - name: api
+          image: langgenius/dify-api:1.13.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              if [ "${MIGRATION_ENABLED}" = "true" ]; then
+                python -m flask db upgrade
+              fi
+              exec gunicorn \
+                --worker-class ${SERVER_WORKER_CLASS:-gevent} \
+                --workers ${SERVER_WORKER_AMOUNT:-4} \
+                --worker-connections ${SERVER_WORKER_CONNECTIONS:-10} \
+                --bind ${DIFY_BIND_ADDRESS:-0.0.0.0}:${DIFY_PORT:-5001} \
+                --timeout ${GUNICORN_TIMEOUT:-360} \
+                --max-requests 10000 \
+                --max-requests-jitter 1000 \
+                --preload \
+                app:app
+          ports:
+            - name: http
+              containerPort: 5001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: dify-app-config
+            - secretRef:
+                name: dify-app-secrets
+          env:
+            - name: MODE
+              value: "api"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: dify-app-secrets
+                  key: DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dify-app-secrets
+                  key: DB_PASSWORD
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30  # Allow up to 5 minutes for startup
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/api/storage
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: dify-api-storage-pvc
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - dify-api
+                topologyKey: kubernetes.io/hostname
+---
+# Dify API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-api
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app: dify-api
+  ports:
+    - name: http
+      port: 5001
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+---
+# Dify Worker Deployment (Celery async task workers)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dify-worker
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/version: "1.13.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dify-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: dify-worker
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: dify-api
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z dify-postgres 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z dify-redis 6379; do
+                echo "Waiting for Redis..."
+                sleep 2
+              done
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+      containers:
+        - name: worker
+          image: langgenius/dify-api:1.13.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              exec celery -A app.celery worker \
+                --loglevel=info \
+                --concurrency ${CELERY_WORKER_AMOUNT:-4} \
+                --pool ${CELERY_WORKER_CLASS:-gevent} \
+                -Q dataset,generation,mail,ops_trace,app_deletion \
+                --without-gossip \
+                --without-mingle
+          envFrom:
+            - configMapRef:
+                name: dify-app-config
+            - secretRef:
+                name: dify-app-secrets
+          env:
+            - name: MODE
+              value: "worker"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - celery -A app.celery inspect ping -d celery@$HOSTNAME
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/api/storage
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: dify-api-storage-pvc
+---
+# Dify Worker Beat Deployment (Celery scheduled task scheduler)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dify-worker-beat
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: worker-beat
+    app.kubernetes.io/version: "1.13.0"
+spec:
+  # IMPORTANT: Only 1 replica for worker beat to avoid duplicate scheduled tasks
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dify-worker-beat
+  strategy:
+    type: Recreate  # Use Recreate to prevent two beat instances running simultaneously
+  template:
+    metadata:
+      labels:
+        app: dify-worker-beat
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: worker-beat
+    spec:
+      serviceAccountName: dify-api
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z dify-redis 6379; do
+                echo "Waiting for Redis..."
+                sleep 2
+              done
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+      containers:
+        - name: worker-beat
+          image: langgenius/dify-api:1.13.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              exec celery -A app.celery beat \
+                --loglevel=info \
+                --schedule=/tmp/celerybeat-schedule \
+                --pidfile=/tmp/celerybeat.pid
+          envFrom:
+            - configMapRef:
+                name: dify-app-config
+            - secretRef:
+                name: dify-app-secrets
+          env:
+            - name: MODE
+              value: "beat"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+---
+# Dify Web Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dify-web
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: web
+    app.kubernetes.io/version: "1.13.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dify-web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: dify-web
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: dify-web
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: dify-web
+      containers:
+        - name: web
+          image: langgenius/dify-web:1.13.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: EDITION
+              value: "SELF_HOSTED"
+            - name: CONSOLE_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: dify-app-config
+                  key: CONSOLE_API_URL
+            - name: APP_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: dify-app-config
+                  key: APP_API_URL
+            - name: FILES_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: dify-app-config
+                  key: FILES_URL
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - dify-web
+                topologyKey: kubernetes.io/hostname
+---
+# Dify Web Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-web
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: web
+spec:
+  selector:
+    app: dify-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+---
+# Dify Sandbox Deployment (Code execution environment)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dify-sandbox
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: sandbox
+    app.kubernetes.io/version: "0.2.12"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dify-sandbox
+  template:
+    metadata:
+      labels:
+        app: dify-sandbox
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: sandbox
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 0  # Sandbox requires root for code execution isolation
+      containers:
+        - name: sandbox
+          image: langgenius/dify-sandbox:0.2.12
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8194
+              protocol: TCP
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dify-app-secrets
+                  key: CODE_EXECUTION_API_KEY
+            - name: GIN_MODE
+              value: "release"
+            - name: WORKER_TIMEOUT
+              value: "15"
+            - name: ENABLE_NETWORK
+              value: "true"
+            - name: SANDBOX_PORT
+              value: "8194"
+            - name: HTTP_PROXY
+              valueFrom:
+                configMapKeyRef:
+                  name: dify-app-config
+                  key: SSRF_PROXY_HTTP_URL
+            - name: HTTPS_PROXY
+              valueFrom:
+                configMapKeyRef:
+                  name: dify-app-config
+                  key: SSRF_PROXY_HTTPS_URL
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            # Sandbox needs elevated capabilities for code isolation
+            privileged: false
+            allowPrivilegeEscalation: false
+---
+# Dify Sandbox Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-sandbox
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: sandbox
+spec:
+  selector:
+    app: dify-sandbox
+  ports:
+    - name: http
+      port: 8194
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+---
+# Dify Plugin Daemon Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dify-plugin-daemon
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: plugin-daemon
+    app.kubernetes.io/version: "0.5.3"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dify-plugin-daemon
+  template:
+    metadata:
+      labels:
+        app: dify-plugin-daemon
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: plugin-daemon
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z dify-postgres 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+      containers:
+        - name: plugin-daemon
+          image: langgenius/dify-plugin-daemon:0.5.3-local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5002
+              protocol: TCP
+            - name: debug
+              containerPort: 5003
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: dify-app-config
+            - secretRef:
+                name: dify-app-secrets
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: dify-app-config
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: dify-app-config
+                  key: DB_PORT
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: dify-app-secrets
+                  key: DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dify-app-secrets
+                  key: DB_PASSWORD
+            - name: SERVER_PORT
+              value: "5002"
+            - name: PLUGIN_DAEMON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dify-app-secrets
+                  key: PLUGIN_DAEMON_KEY
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: plugin-storage
+              mountPath: /app/storage
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: plugin-storage
+          persistentVolumeClaim:
+            claimName: dify-plugin-daemon-pvc
+---
+# Plugin Daemon Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-plugin-daemon
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: plugin-daemon
+spec:
+  selector:
+    app: dify-plugin-daemon
+  ports:
+    - name: http
+      port: 5002
+      targetPort: http
+      protocol: TCP
+    - name: debug
+      port: 5003
+      targetPort: debug
+      protocol: TCP
+  type: ClusterIP
+---
+# SSRF Proxy Deployment (Squid proxy for SSRF protection)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dify-ssrf-proxy
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: ssrf-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dify-ssrf-proxy
+  template:
+    metadata:
+      labels:
+        app: dify-ssrf-proxy
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: ssrf-proxy
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ssrf-proxy
+          image: ubuntu/squid:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: proxy
+              containerPort: 3128
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+---
+# SSRF Proxy Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-ssrf-proxy
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: ssrf-proxy
+spec:
+  selector:
+    app: dify-ssrf-proxy
+  ports:
+    - name: proxy
+      port: 3128
+      targetPort: proxy
+      protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,204 @@
+---
+# ServiceMonitor for Dify API (requires Prometheus Operator)
+# kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/bundle.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dify-api-monitor
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: monitoring
+    # Match the Prometheus operator release label if needed
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+# PrometheusRule for Dify alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dify-alerts
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: monitoring
+    release: prometheus
+spec:
+  groups:
+    - name: dify.rules
+      rules:
+        # API availability alert
+        - alert: DifyAPIDown
+          expr: up{job="dify-api"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Dify API is down"
+            description: "Dify API has been down for more than 2 minutes."
+
+        # High error rate alert
+        - alert: DifyAPIHighErrorRate
+          expr: |
+            rate(http_requests_total{job="dify-api",status=~"5.."}[5m])
+            / rate(http_requests_total{job="dify-api"}[5m]) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dify API high error rate"
+            description: "Dify API error rate is above 5% for the last 5 minutes."
+
+        # High latency alert
+        - alert: DifyAPIHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              rate(http_request_duration_seconds_bucket{job="dify-api"}[5m])
+            ) > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dify API high latency"
+            description: "95th percentile latency is above 5 seconds."
+
+        # Worker queue depth alert
+        - alert: DifyCeleryQueueDepth
+          expr: celery_tasks_pending > 1000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dify Celery queue is deep"
+            description: "Celery task queue has more than 1000 pending tasks."
+
+        # Database connection pool exhaustion
+        - alert: DifyPostgresConnectionsExhausted
+          expr: |
+            (pg_stat_activity_count / pg_settings_max_connections) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PostgreSQL connections near limit"
+            description: "PostgreSQL is using more than 80% of available connections."
+
+        # Memory pressure alert
+        - alert: DifyPodMemoryPressure
+          expr: |
+            (container_memory_usage_bytes{namespace="dify"}
+            / container_spec_memory_limit_bytes{namespace="dify"}) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dify pod memory pressure"
+            description: "A Dify pod is using more than 90% of its memory limit."
+
+        # Persistent volume usage alert
+        - alert: DifyPVCAlmostFull
+          expr: |
+            (kubelet_volume_stats_used_bytes{namespace="dify"}
+            / kubelet_volume_stats_capacity_bytes{namespace="dify"}) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dify PVC almost full"
+            description: "A Dify persistent volume is more than 80% full."
+
+        # Pod crash loop alert
+        - alert: DifyPodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{namespace="dify"}[15m]) > 0.25
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Dify pod is crash looping"
+            description: "A Dify pod has restarted more than 3 times in 15 minutes."
+---
+# Grafana Dashboard ConfigMap for Dify
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dify-grafana-dashboard
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: monitoring
+    grafana_dashboard: "1"  # Label for Grafana sidecar to auto-load dashboards
+data:
+  dify-dashboard.json: |
+    {
+      "annotations": {"list": []},
+      "title": "Dify Application Dashboard",
+      "uid": "dify-overview",
+      "panels": [
+        {
+          "title": "API Request Rate",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "rate(http_requests_total{job='dify-api'}[5m])",
+              "legendFormat": "{{method}} {{status}}"
+            }
+          ]
+        },
+        {
+          "title": "API Error Rate (%)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "targets": [
+            {
+              "expr": "rate(http_requests_total{job='dify-api',status=~'5..'}[5m]) / rate(http_requests_total{job='dify-api'}[5m]) * 100",
+              "legendFormat": "Error Rate"
+            }
+          ]
+        },
+        {
+          "title": "API P95 Latency (s)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job='dify-api'}[5m]))",
+              "legendFormat": "P95 Latency"
+            }
+          ]
+        },
+        {
+          "title": "Celery Task Queue",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {
+              "expr": "celery_tasks_pending",
+              "legendFormat": "Pending Tasks"
+            }
+          ]
+        },
+        {
+          "title": "Pod CPU Usage",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace='dify'}[5m])) by (pod)",
+              "legendFormat": "{{pod}}"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 27,
+      "version": 1
+    }
