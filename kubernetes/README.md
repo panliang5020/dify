@@ -43,18 +43,40 @@ bash kubernetes/package.sh v1.13.0
 #   dify-k8s-deployment-v1.13.0.zip
 ```
 
-### 方式三：通过 GitHub API 下载单个文件夹
+### 方式三：仅下载 kubernetes 文件夹（无需克隆整个仓库）
 
-无需克隆整个仓库：
+**方法 A：使用 curl / wget 下载分支 zip 包后解压**
 
 ```bash
-# 方法 A：使用 svn export（无需安装额外工具）
-svn export https://github.com/langgenius/dify/trunk/kubernetes dify-kubernetes
+# Linux / macOS — curl
+BRANCH="copilot/create-deployment-documentation"
+curl -L "https://github.com/panliang5020/dify/archive/refs/heads/${BRANCH}.zip" \
+     -o dify-branch.zip
+unzip -q dify-branch.zip \
+      "dify-copilot-create-deployment-documentation/kubernetes/*" \
+      -d /tmp/dify-extract
+mv /tmp/dify-extract/dify-copilot-create-deployment-documentation/kubernetes \
+   ./dify-kubernetes
+rm dify-branch.zip
 
-# 方法 B：使用 GitHub CLI
-gh repo clone langgenius/dify -- --depth=1 --filter=blob:none --sparse
+# 或者用 wget
+wget -q "https://github.com/panliang5020/dify/archive/refs/heads/${BRANCH}.zip" \
+     -O dify-branch.zip
+```
+
+**方法 B：在 GitHub 网页上直接下载**
+
+1. 打开 [https://github.com/panliang5020/dify/tree/copilot/create-deployment-documentation/kubernetes](https://github.com/panliang5020/dify/tree/copilot/create-deployment-documentation/kubernetes)
+2. 点击页面右上角的 **…** 菜单 → **Download directory** 即可下载整个文件夹的 zip 包
+
+**方法 C：使用 git sparse-checkout（仅检出 kubernetes 目录）**
+
+```bash
+git clone --depth=1 --filter=blob:none --sparse \
+    https://github.com/panliang5020/dify.git
 cd dify
 git sparse-checkout set kubernetes
+git checkout copilot/create-deployment-documentation
 ```
 
 ### 方式四：通过 GitHub Actions 手动触发打包
