@@ -1,0 +1,164 @@
+name: Package Kubernetes Deployment Files
+
+on:
+  # Trigger manually from the Actions tab — choose a tag/version to release
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v1.13.0).  Leave blank to use the latest git tag.'
+        required: false
+        default: ''
+      create_release:
+        description: 'Create a GitHub Release with the package as a downloadable asset'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+  # Also trigger automatically when files under kubernetes/ change on the main branch
+  push:
+    branches:
+      - main
+    paths:
+      - 'kubernetes/**'
+
+concurrency:
+  group: package-k8s-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build & upload k8s deployment archive
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create GitHub Releases / upload assets
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can read tags
+
+      - name: Determine release version
+        id: version
+        run: |
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            # Use the most recent git tag, fallback to commit SHA
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "git-${GITHUB_SHA::8}")
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Packaging version: ${VERSION}"
+
+      - name: Validate kubernetes manifests (YAML syntax)
+        run: |
+          python3 - <<'EOF'
+          import yaml, sys, pathlib, os
+
+          errors = []
+          k8s_dir = pathlib.Path("kubernetes")
+          for yaml_file in sorted(k8s_dir.rglob("*.yaml")):
+              try:
+                  with open(yaml_file) as f:
+                      list(yaml.safe_load_all(f.read()))
+                  print(f"  ✅  {yaml_file}")
+              except yaml.YAMLError as exc:
+                  errors.append(f"  ❌  {yaml_file}: {exc}")
+
+          if errors:
+              print("\nYAML validation errors:")
+              for e in errors:
+                  print(e)
+              sys.exit(1)
+          else:
+              print(f"\nAll {len(list(k8s_dir.rglob('*.yaml')))} YAML files are valid.")
+          EOF
+
+      - name: Build archive
+        id: archive
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCHIVE_NAME="dify-k8s-deployment-${VERSION}.tar.gz"
+          ZIP_NAME="dify-k8s-deployment-${VERSION}.zip"
+          TOP_DIR="dify-k8s-${VERSION}"
+
+          # Create tar.gz with a clean top-level directory name
+          tar -czf "${ARCHIVE_NAME}" \
+            --transform "s|^kubernetes|${TOP_DIR}|" \
+            --exclude='*.pyc' \
+            --exclude='__pycache__' \
+            kubernetes/
+
+          # Create zip using the same temp-directory technique so the layout matches tar.gz
+          TMP_PARENT="$(mktemp -d)"
+          TMP_DIR="${TMP_PARENT}/${TOP_DIR}"
+          cp -r kubernetes/ "$TMP_DIR"
+          (cd "$TMP_PARENT" && zip -rq "$(pwd)/${ZIP_NAME}" "${TOP_DIR}/")
+          rm -rf "$TMP_PARENT"
+
+          echo "archive_tar=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "archive_zip=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+
+          echo "Created archives:"
+          ls -lh "${ARCHIVE_NAME}" "${ZIP_NAME}"
+          echo "Contents of tar.gz:"
+          tar -tzf "${ARCHIVE_NAME}" | head -20
+
+      - name: Upload tar.gz as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dify-k8s-deployment-${{ steps.version.outputs.version }}-tar
+          path: ${{ steps.archive.outputs.archive_tar }}
+          retention-days: 30
+
+      - name: Upload zip as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dify-k8s-deployment-${{ steps.version.outputs.version }}-zip
+          path: ${{ steps.archive.outputs.archive_zip }}
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: >
+          (github.event.inputs.create_release == 'true' || github.event_name == 'push')
+          && startsWith(steps.version.outputs.version, 'v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: k8s-${{ steps.version.outputs.version }}
+          name: "Dify K8s Deployment Files ${{ steps.version.outputs.version }}"
+          body: |
+            ## Dify Kubernetes 部署文件包 ${{ steps.version.outputs.version }}
+
+            本发行版包含用于在 Kubernetes 上部署 Dify 的完整配置清单。
+
+            ### 📥 下载
+
+            | 文件 | 说明 |
+            |------|------|
+            | `dify-k8s-deployment-*.tar.gz` | Linux / macOS 推荐 |
+            | `dify-k8s-deployment-*.zip` | Windows 推荐 |
+
+            ### 快速开始
+
+            ```bash
+            # 1. 下载并解压
+            tar -xzf dify-k8s-deployment-${{ steps.version.outputs.version }}.tar.gz
+            cd dify-k8s-${{ steps.version.outputs.version }}
+
+            # 2. 设置域名
+            export DIFY_DOMAIN=dify.your-company.com
+
+            # 3. 运行部署脚本
+            bash deploy.sh
+            ```
+
+            详细部署说明请参阅 [Kubernetes 部署文档](https://github.com/${{ github.repository }}/blob/main/kubernetes/README.md)。
+          files: |
+            ${{ steps.archive.outputs.archive_tar }}
+            ${{ steps.archive.outputs.archive_zip }}
+          draft: false
+          prerelease: false

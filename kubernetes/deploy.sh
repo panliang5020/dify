@@ -99,9 +99,12 @@ generate_secrets() {
   WEAVIATE_API_KEY=$(openssl rand -base64 32)
   SANDBOX_API_KEY=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 24)
   PLUGIN_DAEMON_KEY=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 24)
+  # Generate a random initial admin password rather than using a hardcoded value
+  INIT_PASSWORD=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9!@#' | head -c 20)
 
-  # 保存密钥到文件（部署完成后请安全保管或删除此文件）
-  SECRETS_FILE="/tmp/dify-secrets-$(date +%Y%m%d_%H%M%S).txt"
+  # Save secrets to a temp file with restrictive permissions (owner read-only)
+  SECRETS_FILE="$(mktemp "${TMPDIR:-/tmp}/dify-secrets.XXXXXX")"
+  chmod 600 "$SECRETS_FILE"
   cat > "$SECRETS_FILE" <<EOF
 # Dify 部署密钥 - 请安全保管，部署后删除此文件
 # 生成时间: $(date)
@@ -112,9 +115,10 @@ REDIS_PASSWORD=${REDIS_PASSWORD}
 WEAVIATE_API_KEY=${WEAVIATE_API_KEY}
 SANDBOX_API_KEY=${SANDBOX_API_KEY}
 PLUGIN_DAEMON_KEY=${PLUGIN_DAEMON_KEY}
+INIT_PASSWORD=${INIT_PASSWORD}
 EOF
 
-  log_success "密钥已保存到 ${SECRETS_FILE}，请安全保管！"
+  log_success "密钥已保存到 ${SECRETS_FILE}（权限 600），请安全保管并在部署后删除！"
 }
 
 create_namespace() {
@@ -147,7 +151,7 @@ create_secrets() {
   kubectl create secret generic dify-app-secrets \
     --namespace "$NAMESPACE" \
     --from-literal=SECRET_KEY="${SECRET_KEY}" \
-    --from-literal=INIT_PASSWORD="Admin@Dify2024" \
+    --from-literal=INIT_PASSWORD="${INIT_PASSWORD}" \
     --from-literal=DB_USERNAME="postgres" \
     --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
     --from-literal=REDIS_PASSWORD="${REDIS_PASSWORD}" \
@@ -269,9 +273,11 @@ print_summary() {
   echo "  管理后台:   https://${DOMAIN}/install  (首次访问设置管理员)"
   echo "  API 文档:   https://${DOMAIN}/console/api"
   echo ""
-  echo "  初始管理员密码: Admin@Dify2024 (请立即修改！)"
+  echo "  初始管理员密码已随机生成，保存在: ${SECRETS_FILE:-未生成}"
+  echo "  （请查阅该文件中的 INIT_PASSWORD 字段，登录后立即修改密码！）"
   echo ""
   echo "  密钥备份文件: ${SECRETS_FILE:-未生成}"
+  echo "  ⚠️  请将该文件复制到安全位置后立即删除！"
   echo ""
   echo "  查看所有 Pod 状态:"
   echo "    kubectl get pods -n ${NAMESPACE}"

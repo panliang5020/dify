@@ -6,6 +6,65 @@
 
 ---
 
+## 📥 下载部署文件到本地
+
+在开始阅读文档之前，您可以通过以下任一方式将本目录下载到本地：
+
+### 方式一：使用 GitHub Releases（推荐）
+
+前往 [Releases 页面](../../releases)，找到最新的 **Dify K8s Deployment Files** 版本，下载对应平台的压缩包：
+
+| 文件 | 适用平台 |
+|------|---------|
+| `dify-k8s-deployment-vX.Y.Z.tar.gz` | Linux / macOS |
+| `dify-k8s-deployment-vX.Y.Z.zip` | Windows |
+
+```bash
+# Linux / macOS 解压并使用
+tar -xzf dify-k8s-deployment-v1.13.0.tar.gz
+cd dify-k8s-v1.13.0
+export DIFY_DOMAIN=dify.your-company.com
+bash deploy.sh
+```
+
+### 方式二：使用 package.sh 本地打包
+
+如果您已克隆仓库，可以直接运行打包脚本：
+
+```bash
+git clone https://github.com/langgenius/dify.git
+cd dify
+
+# 打包为 tar.gz 和 zip（版本号可自定义）
+bash kubernetes/package.sh v1.13.0
+
+# 输出文件在仓库根目录：
+#   dify-k8s-deployment-v1.13.0.tar.gz
+#   dify-k8s-deployment-v1.13.0.zip
+```
+
+### 方式三：通过 GitHub API 下载单个文件夹
+
+无需克隆整个仓库：
+
+```bash
+# 方法 A：使用 svn export（无需安装额外工具）
+svn export https://github.com/langgenius/dify/trunk/kubernetes dify-kubernetes
+
+# 方法 B：使用 GitHub CLI
+gh repo clone langgenius/dify -- --depth=1 --filter=blob:none --sparse
+cd dify
+git sparse-checkout set kubernetes
+```
+
+### 方式四：通过 GitHub Actions 手动触发打包
+
+1. 打开仓库 → **Actions** → **Package Kubernetes Deployment Files**
+2. 点击 **Run workflow**，输入目标版本号
+3. 工作流完成后，在该次运行的 **Artifacts** 中下载压缩包
+
+---
+
 ## 目录
 
 1. [概述与架构](#1-概述与架构)
