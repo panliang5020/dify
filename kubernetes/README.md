@@ -108,6 +108,14 @@ git checkout copilot/create-deployment-documentation
 17. [故障排查](#17-故障排查)
 18. [生产就绪检查清单](#18-生产就绪检查清单)
 
+**附录**
+
+- [A. 完整部署命令序列](#a-完整部署命令序列)
+- [B. 向量数据库切换](#b-向量数据库切换)
+- [C. 多云/多集群部署](#c-多云多集群部署)
+- [D. 资源规划参考](#d-资源规划参考)
+- [**E. 主流云服务商集群接入指南**](#e-主流云服务商集群接入指南)（新用户请优先阅读此章节）
+
 ---
 
 ## 1. 概述与架构
@@ -1480,6 +1488,672 @@ kubectl rollout restart deployment/dify-worker -n dify
 | 小型（<50用户） | 2×(1C/2G) | 2×(1C/2G) | 1×(2C/4G) | 1×(1C/2G) | 1×(2C/4G) |
 | 中型（50-500用户） | 4×(2C/4G) | 4×(2C/4G) | 1×(4C/8G) | 1×(2C/4G) | 1×(4C/8G) |
 | 大型（>500用户） | 8×(4C/8G) | 8×(4C/8G) | HA(8C/16G) | Cluster | Cluster |
+
+---
+
+### E. 主流云服务商集群接入指南
+
+> **适用场景**：您已有（或准备创建）托管 Kubernetes 集群，想直接将 `kubernetes/` 目录中的 Manifest 部署到云服务商的集群上。
+>
+> **阅读顺序**：先按本附录完成"集群创建 → kubectl 连接 → 云原生前置组件安装"，再回到正文第 2 节继续常规部署流程。
+
+本章节以五大主流云服务商为例，提供从零开始的端到端操作示范：
+
+| 云服务商 | 托管 K8s 服务 | 本章节跳转 |
+|---------|------------|---------|
+| AWS | Amazon EKS | [→ E.1](#e1-aws-eks) |
+| Google Cloud | Google GKE | [→ E.2](#e2-google-gke) |
+| Microsoft Azure | Azure AKS | [→ E.3](#e3-microsoft-azure-aks) |
+| 阿里云 | ACK（容器服务 Kubernetes 版） | [→ E.4](#e4-阿里云-ack) |
+| 腾讯云 | TKE（容器服务） | [→ E.5](#e5-腾讯云-tke) |
+
+各云服务商与本文正文章节的对应关系：
+
+| 部署步骤 | 正文章节 | AWS EKS 注意事项 | GKE 注意事项 | AKS 注意事项 | ACK 注意事项 | TKE 注意事项 |
+|---------|---------|--------------|------------|------------|------------|------------|
+| StorageClass | §4.1 | `ebs.csi.aws.com` gp3 | `pd.csi.storage.gke.io` | `disk.csi.azure.com` | `diskplugin.csi.alibabacloud.com` | `com.tencent.cloud.csi.cbs` |
+| 对象存储 | §2.4 | S3 + IAM Role | GCS + Workload Identity | Azure Blob + Pod Identity | OSS + RAM Role | COS + 访问密钥 |
+| Ingress | §9 | Nginx / AWS ALB | Nginx / GKE Ingress | Nginx / AGIC | Nginx / ALB Ingress | Nginx / CLB/ALB |
+| TLS 证书 | §9.2 | cert-manager | cert-manager / 托管证书 | cert-manager | cert-manager | cert-manager |
+| 监控 | §12 | CloudWatch + Prometheus | Cloud Monitoring + Prometheus | Azure Monitor + Prometheus | ARMS + Prometheus | CLS + Prometheus |
+
+---
+
+#### E.1 AWS EKS
+
+**前置工具**
+
+```bash
+# 安装 AWS CLI v2
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+unzip awscliv2.zip && sudo ./aws/install
+aws configure   # 填入 Access Key ID / Secret / Region
+
+# 安装 eksctl
+curl --silent --location "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+sudo mv /tmp/eksctl /usr/local/bin
+
+# 安装 kubectl（若未安装）
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+```
+
+**创建 EKS 集群**
+
+```bash
+eksctl create cluster \
+  --name dify-prod \
+  --region ap-southeast-1 \        # 按实际区域修改
+  --version 1.29 \
+  --nodegroup-name dify-nodes \
+  --node-type m6i.2xlarge \        # 8 vCPU / 32 GiB，可按需调整
+  --nodes 3 \
+  --nodes-min 3 \
+  --nodes-max 10 \
+  --managed \
+  --with-oidc \                    # 启用 IRSA（IAM Roles for Service Accounts）
+  --asg-access                     # 允许 Cluster Autoscaler 控制 ASG
+```
+
+> 集群创建约需 15–20 分钟。`eksctl` 会自动更新 `~/.kube/config`。
+
+**验证连接**
+
+```bash
+kubectl cluster-info
+kubectl get nodes
+```
+
+**安装 EBS CSI Driver（持久化存储）**
+
+```bash
+# 为 EBS CSI 创建 IAM 服务账号
+eksctl create iamserviceaccount \
+  --name ebs-csi-controller-sa \
+  --namespace kube-system \
+  --cluster dify-prod \
+  --role-name AmazonEKS_EBS_CSI_DriverRole \
+  --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
+  --approve
+
+# 启用 EBS CSI 插件
+eksctl create addon \
+  --name aws-ebs-csi-driver \
+  --cluster dify-prod \
+  --service-account-role-arn \
+    $(aws iam get-role --role-name AmazonEKS_EBS_CSI_DriverRole --query 'Role.Arn' --output text) \
+  --force
+
+# 创建 gp3 StorageClass（在 manifests/storage/pvc.yaml 中使用 storageClassName: dify-ssd）
+kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dify-ssd
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+EOF
+```
+
+**对象存储（S3）与 IRSA 配置**
+
+```bash
+# 1. 创建 S3 Bucket
+aws s3api create-bucket \
+  --bucket dify-storage-prod \
+  --region ap-southeast-1 \
+  --create-bucket-configuration LocationConstraint=ap-southeast-1
+
+# 2. 为 Dify API / Worker 创建 IAM 角色（使用 IRSA，无需在代码中硬编码密钥）
+eksctl create iamserviceaccount \
+  --name dify-s3-sa \
+  --namespace dify \
+  --cluster dify-prod \
+  --attach-policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess \
+  --approve
+
+# 3. 在 manifests/applications/applications.yaml 中，为 dify-api 和 dify-worker Deployment
+#    添加 serviceAccountName: dify-s3-sa，并在 ConfigMap 中配置：
+#    STORAGE_TYPE=s3
+#    S3_BUCKET_NAME=dify-storage-prod
+#    S3_REGION=ap-southeast-1
+#    AWS_DEFAULT_REGION=ap-southeast-1
+```
+
+**安装 Nginx Ingress Controller**
+
+```bash
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.type=LoadBalancer \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-type"=nlb
+```
+
+**安装 cert-manager**
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+```
+
+**安装 Metrics Server**
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+完成以上步骤后，返回正文 **第 3 节** 继续配置。
+
+---
+
+#### E.2 Google GKE
+
+**前置工具**
+
+```bash
+# 安装 Google Cloud SDK
+curl https://sdk.cloud.google.com | bash
+exec -l $SHELL
+gcloud init
+
+# 安装 gke-gcloud-auth-plugin（kubectl 认证插件）
+gcloud components install gke-gcloud-auth-plugin
+
+# 安装 kubectl（若未安装）
+gcloud components install kubectl
+```
+
+**创建 GKE Autopilot 集群（推荐，免运维节点）**
+
+```bash
+gcloud container clusters create-auto dify-prod \
+  --region asia-east1 \            # 按实际区域修改
+  --release-channel regular
+```
+
+**或创建 Standard 集群（更灵活）**
+
+```bash
+gcloud container clusters create dify-prod \
+  --region asia-east1 \
+  --release-channel regular \
+  --machine-type n2-standard-8 \   # 8 vCPU / 32 GiB
+  --num-nodes 1 \                  # 每个 Zone 的节点数（3 Zone = 3 节点）
+  --min-nodes 1 \
+  --max-nodes 5 \
+  --enable-autoscaling \
+  --workload-pool=$(gcloud config get-value project).svc.id.goog \  # 启用 Workload Identity
+  --addons HorizontalPodAutoscaling,HttpLoadBalancing
+```
+
+**获取凭据**
+
+```bash
+gcloud container clusters get-credentials dify-prod --region asia-east1
+kubectl cluster-info
+kubectl get nodes
+```
+
+**对象存储（GCS）与 Workload Identity 配置**
+
+```bash
+PROJECT_ID=$(gcloud config get-value project)
+
+# 1. 创建 GCS Bucket
+gsutil mb -l asia-east1 gs://dify-storage-prod-${PROJECT_ID}/
+
+# 2. 创建 IAM Service Account
+gcloud iam service-accounts create dify-gcs-sa \
+  --display-name "Dify GCS Service Account"
+
+# 3. 绑定权限
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+  --member "serviceAccount:dify-gcs-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role "roles/storage.objectAdmin"
+
+# 4. 将 K8s ServiceAccount 与 GCP IAM SA 绑定
+gcloud iam service-accounts add-iam-policy-binding \
+  dify-gcs-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:${PROJECT_ID}.svc.id.goog[dify/dify-api-sa]"
+
+# 5. 在 manifests/applications/applications.yaml 中为 dify-api 和 dify-worker 添加：
+#    serviceAccountName: dify-api-sa（并在该 SA 上添加 iam.gke.io/gcp-service-account 注解）
+#    ConfigMap 中配置：
+#    STORAGE_TYPE=google-storage
+#    GOOGLE_STORAGE_BUCKET=dify-storage-prod-<project_id>
+```
+
+**StorageClass（SSD 持久盘）**
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dify-ssd
+provisioner: pd.csi.storage.gke.io
+parameters:
+  type: pd-ssd
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+EOF
+```
+
+**安装 Nginx Ingress Controller**
+
+```bash
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.type=LoadBalancer
+```
+
+**安装 cert-manager 与 Metrics Server**
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+完成以上步骤后，返回正文 **第 3 节** 继续配置。
+
+---
+
+#### E.3 Microsoft Azure AKS
+
+**前置工具**
+
+```bash
+# 安装 Azure CLI
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+az login
+
+# 安装 kubectl（若未安装）
+az aks install-cli
+```
+
+**创建资源组与 AKS 集群**
+
+```bash
+RESOURCE_GROUP=dify-prod-rg
+CLUSTER_NAME=dify-prod
+LOCATION=eastasia   # 按实际区域修改
+
+# 创建资源组
+az group create --name ${RESOURCE_GROUP} --location ${LOCATION}
+
+# 创建 AKS 集群（启用 Managed Identity 和 OIDC Issuer）
+az aks create \
+  --resource-group ${RESOURCE_GROUP} \
+  --name ${CLUSTER_NAME} \
+  --location ${LOCATION} \
+  --kubernetes-version 1.29 \
+  --node-count 3 \
+  --node-vm-size Standard_D8s_v5 \  # 8 vCPU / 32 GiB
+  --enable-managed-identity \
+  --enable-oidc-issuer \
+  --enable-workload-identity \
+  --enable-cluster-autoscaler \
+  --min-count 3 \
+  --max-count 10 \
+  --network-plugin azure \
+  --network-policy azure \
+  --generate-ssh-keys
+```
+
+**获取凭据**
+
+```bash
+az aks get-credentials \
+  --resource-group ${RESOURCE_GROUP} \
+  --name ${CLUSTER_NAME}
+kubectl cluster-info
+kubectl get nodes
+```
+
+**安装 Azure Disk CSI Driver（通常已内置）**
+
+```bash
+# 验证 CSI Driver 是否已启用
+az aks show \
+  --resource-group ${RESOURCE_GROUP} \
+  --name ${CLUSTER_NAME} \
+  --query "storageProfile.diskCSIDriver"
+
+# 创建 Premium SSD StorageClass
+kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dify-ssd
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: Premium_LRS
+  kind: Managed
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+EOF
+```
+
+**对象存储（Azure Blob Storage）与 Workload Identity 配置**
+
+```bash
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+TENANT_ID=$(az account show --query tenantId -o tsv)
+
+# 1. 创建存储账号和容器
+az storage account create \
+  --name difystorageprod \
+  --resource-group ${RESOURCE_GROUP} \
+  --location ${LOCATION} \
+  --sku Standard_LRS \
+  --kind StorageV2
+
+az storage container create \
+  --name dify-files \
+  --account-name difystorageprod
+
+# 2. 创建 Managed Identity
+az identity create \
+  --name dify-blob-identity \
+  --resource-group ${RESOURCE_GROUP}
+
+IDENTITY_CLIENT_ID=$(az identity show \
+  --name dify-blob-identity \
+  --resource-group ${RESOURCE_GROUP} \
+  --query clientId -o tsv)
+
+# 3. 赋予 Storage Blob Data Contributor 权限
+STORAGE_ACCOUNT_ID=$(az storage account show \
+  --name difystorageprod \
+  --resource-group ${RESOURCE_GROUP} \
+  --query id -o tsv)
+
+az role assignment create \
+  --assignee ${IDENTITY_CLIENT_ID} \
+  --role "Storage Blob Data Contributor" \
+  --scope ${STORAGE_ACCOUNT_ID}
+
+# 4. 在 manifests 的 ConfigMap 中配置：
+#    STORAGE_TYPE=azure-blob
+#    AZURE_BLOB_ACCOUNT_NAME=difystorageprod
+#    AZURE_BLOB_ACCOUNT_KEY=<从门户获取>
+#    AZURE_BLOB_CONTAINER_NAME=dify-files
+```
+
+**安装 Nginx Ingress Controller**
+
+```bash
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.type=LoadBalancer \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz
+```
+
+**安装 cert-manager 与 Metrics Server**
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+完成以上步骤后，返回正文 **第 3 节** 继续配置。
+
+---
+
+#### E.4 阿里云 ACK
+
+**前置工具**
+
+```bash
+# 安装阿里云 CLI
+curl -Lo aliyun https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz
+tar -xzf aliyun-cli-linux-latest-amd64.tgz
+sudo mv aliyun /usr/local/bin/
+aliyun configure   # 填入 Access Key ID / Secret / Region
+
+# 安装 kubectl（若未安装）
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+```
+
+**通过控制台创建 ACK 集群（推荐）**
+
+1. 登录 [容器服务控制台](https://cs.console.aliyun.com/)
+2. 选择**集群** → **创建集群** → **标准托管集群**（ACK Managed）
+3. 建议配置：
+   - Kubernetes 版本：1.29+
+   - Worker 规格：ecs.g7.2xlarge（8 vCPU / 32 GiB）× 3 节点
+   - 操作系统：Alibaba Cloud Linux 3
+   - 网络插件：Terway（推荐，支持 NetworkPolicy）
+   - 勾选"RRSA 功能"（相当于 IRSA，允许 Pod 无密钥访问 OSS）
+
+**获取 kubeconfig**
+
+```bash
+# 通过 CLI 获取（集群 ID 从控制台获取）
+aliyun cs DescribeClusterUserKubeconfig --ClusterId <cluster-id> \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['config'])" \
+  > ~/.kube/config
+
+kubectl cluster-info
+kubectl get nodes
+```
+
+**StorageClass（云盘 ESSD）**
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dify-ssd
+provisioner: diskplugin.csi.alibabacloud.com
+parameters:
+  type: cloud_essd
+  performanceLevel: "PL1"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+EOF
+```
+
+**对象存储（OSS）与 RRSA 配置**
+
+```bash
+# 1. 创建 OSS Bucket（在控制台或 CLI）
+aliyun oss mb oss://dify-storage-prod --region cn-hangzhou
+
+# 2. 在控制台"集群详情 → 安全 → RRSA"中，为命名空间 dify 下的
+#    ServiceAccount dify-api-sa 关联 RAM 角色并授予 OSS 权限。
+#
+# 3. 在 manifests/applications/applications.yaml 中为 dify-api/dify-worker 添加：
+#    serviceAccountName: dify-api-sa
+#
+# 4. 在 ConfigMap 中配置：
+#    STORAGE_TYPE=aliyun-oss
+#    ALIYUN_OSS_BUCKET_NAME=dify-storage-prod
+#    ALIYUN_OSS_ENDPOINT=oss-cn-hangzhou-internal.aliyuncs.com  # 使用内网地址
+#    ALIYUN_OSS_REGION=cn-hangzhou
+#
+# 如不使用 RRSA，也可使用 AccessKey（不推荐用于生产）：
+#    ALIYUN_OSS_ACCESS_KEY=<your-ak>
+#    ALIYUN_OSS_SECRET_KEY=<your-sk>
+```
+
+**安装 Nginx Ingress Controller**
+
+```bash
+# ACK 集群可通过控制台"应用市场"一键安装 nginx-ingress-controller
+# 或使用 Helm：
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.type=LoadBalancer \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/alibaba-cloud-loadbalancer-charge-type"=PayByTraffic
+```
+
+**安装 cert-manager 与 Metrics Server**
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+# Metrics Server 通常由 ACK 预装，若缺失：
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+完成以上步骤后，返回正文 **第 3 节** 继续配置。
+
+---
+
+#### E.5 腾讯云 TKE
+
+**前置工具**
+
+```bash
+# 安装腾讯云 CLI (tccli)
+pip3 install tccli
+tccli configure   # 填入 SecretId / SecretKey / Region
+
+# 安装 kubectl（若未安装）
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+```
+
+**通过控制台创建 TKE 集群（推荐）**
+
+1. 登录 [容器服务控制台](https://console.cloud.tencent.com/tke2/cluster)
+2. 选择**集群** → **新建** → **标准集群**
+3. 建议配置：
+   - Kubernetes 版本：1.28+
+   - Worker 机型：S6.2XLARGE16（8 vCPU / 16 GiB）× 3 节点，建议配置 32 GiB 内存节点
+   - 操作系统：TencentOS Server 3.1
+   - 网络插件：VPC-CNI（支持 NetworkPolicy）
+
+**获取 kubeconfig**
+
+```bash
+# 在集群详情页 → "基本信息" → "集群APIServer信息" 中下载 kubeconfig 文件
+# 或使用 CLI：
+tccli tke DescribeClusterKubeconfig --ClusterId <cluster-id> \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['Kubeconfig'])" \
+  > ~/.kube/config
+
+kubectl cluster-info
+kubectl get nodes
+```
+
+**StorageClass（CBS 高性能云硬盘）**
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dify-ssd
+provisioner: com.tencent.cloud.csi.cbs
+parameters:
+  type: CLOUD_PREMIUM
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+EOF
+```
+
+**对象存储（COS）配置**
+
+```bash
+# 1. 登录 COS 控制台，创建存储桶（如 dify-storage-prod-1234567890）
+# 2. 创建 API 密钥（建议使用子账号 + 策略绑定，仅授予该桶权限）
+
+# 3. 在 ConfigMap 中配置：
+#    STORAGE_TYPE=tencent-cos
+#    TENCENT_COS_BUCKET_NAME=dify-storage-prod-1234567890
+#    TENCENT_COS_REGION=ap-guangzhou
+#    TENCENT_COS_SECRET_ID=<your-secret-id>
+#    TENCENT_COS_SECRET_KEY=<your-secret-key>
+#
+# 推荐：将 SecretId/SecretKey 存入 Kubernetes Secret（参见正文 §6.1）而非直接写入 ConfigMap
+kubectl create secret generic dify-cos-credentials \
+  --namespace dify \
+  --from-literal=TENCENT_COS_SECRET_ID=<your-secret-id> \
+  --from-literal=TENCENT_COS_SECRET_KEY=<your-secret-key>
+```
+
+**安装 Nginx Ingress Controller**
+
+```bash
+# TKE 集群可通过控制台"应用市场"一键安装 nginx-ingress-controller，
+# 选择"公网 CLB" 或 "内网 CLB" 暴露类型。
+# 或使用 Helm：
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.type=LoadBalancer \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/qcloud-loadbalancer-internal-subnetid"=""
+```
+
+**安装 cert-manager 与 Metrics Server**
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+# Metrics Server 通常由 TKE 预装，若缺失：
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+完成以上步骤后，返回正文 **第 3 节** 继续配置。
+
+---
+
+#### E.6 连接到已有集群（通用步骤）
+
+如果您已经有一个正在运行的 Kubernetes 集群（自建或其他云服务商），请确认以下通用检查清单：
+
+```bash
+# 1. 验证 kubectl 已正确连接到目标集群
+kubectl cluster-info
+kubectl get nodes -o wide
+
+# 2. 确认 Kubernetes 版本 >= 1.25
+kubectl version --short
+
+# 3. 确认集群中至少有一个可用的 StorageClass
+kubectl get storageclass
+
+# 4. 确认 Ingress Controller 已安装（以 Nginx 为例）
+kubectl get pods -n ingress-nginx
+
+# 5. 确认 cert-manager 已安装
+kubectl get pods -n cert-manager
+
+# 6. 确认 Metrics Server 已安装（HPA 依赖）
+kubectl top nodes
+
+# 7. 确认节点资源充足（建议合计 ≥ 24 vCPU / 48 GiB 内存）
+kubectl describe nodes | grep -A 5 "Allocatable:"
+```
+
+所有检查通过后，从正文 **第 3 节** 开始正式部署。
 
 ---
 
