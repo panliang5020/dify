@@ -1,0 +1,415 @@
+---
+# PostgreSQL StatefulSet for Dify
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dify-postgres
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: postgres
+    app.kubernetes.io/version: "15"
+spec:
+  serviceName: dify-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dify-postgres
+  template:
+    metadata:
+      labels:
+        app: dify-postgres
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: postgres
+    spec:
+      serviceAccountName: dify-api
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      initContainers:
+        - name: postgres-init-permissions
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 999:999 /var/lib/postgresql/data
+              chmod 700 /var/lib/postgresql/data
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: dify-postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dify-postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: dify-postgres-secret
+                  key: POSTGRES_DB
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          args:
+            - -c
+            - max_connections=200
+            - -c
+            - shared_buffers=256MB
+            - -c
+            - effective_cache_size=1GB
+            - -c
+            - maintenance_work_mem=128MB
+            - -c
+            - checkpoint_completion_target=0.9
+            - -c
+            - wal_buffers=16MB
+            - -c
+            - default_statistics_target=100
+            - -c
+            - random_page_cost=1.1
+            - -c
+            - effective_io_concurrency=200
+            - -c
+            - work_mem=4MB
+            - -c
+            - min_wal_size=1GB
+            - -c
+            - max_wal_size=4GB
+            - -c
+            - log_min_duration_statement=1000
+            - -c
+            - log_connections=on
+            - -c
+            - log_disconnections=on
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+                - -d
+                - dify
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+                - -d
+                - dify
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: postgres-init
+              mountPath: /docker-entrypoint-initdb.d
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: dify-postgres-pvc
+        - name: postgres-init
+          configMap:
+            name: dify-postgres-init
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-postgres
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: postgres
+spec:
+  selector:
+    app: dify-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet
+---
+# Redis StatefulSet for Dify
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dify-redis
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/version: "6"
+spec:
+  serviceName: dify-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dify-redis
+  template:
+    metadata:
+      labels:
+        app: dify-redis
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: redis
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      initContainers:
+        - name: redis-init-permissions
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 999:999 /data
+              chmod 700 /data
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      containers:
+        - name: redis
+          image: redis:6-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+            - --requirepass
+            - $(REDIS_PASSWORD)
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dify-redis-secret
+                  key: REDIS_PASSWORD
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a $REDIS_PASSWORD ping | grep PONG
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a $REDIS_PASSWORD ping | grep PONG
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: redis-config
+              mountPath: /etc/redis
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: dify-redis-pvc
+        - name: redis-config
+          configMap:
+            name: dify-redis-config
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-redis
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: redis
+spec:
+  selector:
+    app: dify-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+  type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet
+---
+# Weaviate StatefulSet (Vector Database)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dify-weaviate
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: weaviate
+    app.kubernetes.io/version: "1.27.0"
+spec:
+  serviceName: dify-weaviate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dify-weaviate
+  template:
+    metadata:
+      labels:
+        app: dify-weaviate
+        app.kubernetes.io/name: dify
+        app.kubernetes.io/component: weaviate
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: weaviate
+          image: semitechnologies/weaviate:1.27.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+          env:
+            - name: QUERY_DEFAULTS_LIMIT
+              value: "25"
+            - name: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED
+              value: "false"
+            - name: AUTHENTICATION_APIKEY_ENABLED
+              value: "true"
+            - name: AUTHENTICATION_APIKEY_ALLOWED_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: dify-app-secrets
+                  key: WEAVIATE_API_KEY
+            - name: AUTHENTICATION_APIKEY_USERS
+              value: "dify"
+            - name: PERSISTENCE_DATA_PATH
+              value: "/var/lib/weaviate"
+            - name: DEFAULT_VECTORIZER_MODULE
+              value: "none"
+            - name: CLUSTER_HOSTNAME
+              value: "node1"
+            - name: ENABLE_MODULES
+              value: ""
+            - name: GRPC_PORT
+              value: "50051"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            httpGet:
+              path: /v1/.well-known/ready
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /v1/.well-known/ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: weaviate-data
+              mountPath: /var/lib/weaviate
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+      volumes:
+        - name: weaviate-data
+          persistentVolumeClaim:
+            claimName: dify-weaviate-pvc
+---
+# Weaviate Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dify-weaviate
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: weaviate
+spec:
+  selector:
+    app: dify-weaviate
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      protocol: TCP
+  type: ClusterIP

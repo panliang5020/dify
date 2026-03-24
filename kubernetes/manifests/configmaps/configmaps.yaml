@@ -1,0 +1,339 @@
+---
+# ConfigMap for Dify application shared settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dify-app-config
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: config
+data:
+  # ===== Application URLs =====
+  # Replace these with your actual domain names
+  CONSOLE_API_URL: "https://api.REPLACE-YOUR-DOMAIN.example.com"
+  CONSOLE_WEB_URL: "https://REPLACE-YOUR-DOMAIN.example.com"
+  SERVICE_API_URL: "https://api.REPLACE-YOUR-DOMAIN.example.com"
+  APP_API_URL: "https://api.REPLACE-YOUR-DOMAIN.example.com"
+  APP_WEB_URL: "https://REPLACE-YOUR-DOMAIN.example.com"
+  FILES_URL: "https://api.REPLACE-YOUR-DOMAIN.example.com"
+  TRIGGER_URL: "https://api.REPLACE-YOUR-DOMAIN.example.com"
+  INTERNAL_FILES_URL: "http://dify-api:5001"
+
+  # ===== Server Configuration =====
+  DIFY_BIND_ADDRESS: "0.0.0.0"
+  DIFY_PORT: "5001"
+  SERVER_WORKER_AMOUNT: "4"
+  SERVER_WORKER_CLASS: "gevent"
+  SERVER_WORKER_CONNECTIONS: "10"
+  GUNICORN_TIMEOUT: "360"
+  DEPLOY_ENV: "PRODUCTION"
+  MIGRATION_ENABLED: "true"
+
+  # ===== Celery Configuration =====
+  CELERY_WORKER_CLASS: "gevent"
+  CELERY_WORKER_AMOUNT: "4"
+  CELERY_AUTO_SCALE: "false"
+  CELERY_MAX_WORKERS: "8"
+  CELERY_MIN_WORKERS: "2"
+  CELERY_BACKEND: "redis"
+
+  # ===== Database Configuration =====
+  DB_TYPE: "postgresql"
+  DB_HOST: "dify-postgres"
+  DB_PORT: "5432"
+  DB_DATABASE: "dify"
+  SQLALCHEMY_POOL_SIZE: "30"
+  SQLALCHEMY_MAX_OVERFLOW: "10"
+  SQLALCHEMY_POOL_RECYCLE: "3600"
+  SQLALCHEMY_ECHO: "false"
+  SQLALCHEMY_POOL_PRE_PING: "true"
+  SQLALCHEMY_POOL_USE_LIFO: "false"
+  SQLALCHEMY_POOL_TIMEOUT: "30"
+
+  # ===== Redis Configuration =====
+  REDIS_HOST: "dify-redis"
+  REDIS_PORT: "6379"
+  REDIS_USE_SSL: "false"
+  REDIS_DB: "0"
+  REDIS_USE_SENTINEL: "false"
+  REDIS_USE_CLUSTERS: "false"
+
+  # ===== Storage Configuration =====
+  # Options: opendal (local fs), s3, azure-blob, google-storage, aliyun-oss, etc.
+  STORAGE_TYPE: "s3"
+  OPENDAL_SCHEME: "s3"
+  S3_REGION: "us-east-1"
+  S3_BUCKET_NAME: "dify-storage"
+  S3_USE_AWS_MANAGED_IAM: "false"
+
+  # ===== Vector Store Configuration =====
+  # Options: weaviate, milvus, qdrant, pgvector, opensearch, elasticsearch, etc.
+  VECTOR_STORE: "weaviate"
+  WEAVIATE_ENDPOINT: "http://dify-weaviate:8080"
+  WEAVIATE_GRPC_ENDPOINT: "grpc://dify-weaviate:50051"
+  WEAVIATE_TOKENIZATION: "word"
+  VECTOR_INDEX_NAME_PREFIX: "Vector_index"
+
+  # ===== Logging Configuration =====
+  LOG_LEVEL: "INFO"
+  LOG_OUTPUT_FORMAT: "json"
+  LOG_FILE: "/app/logs/server.log"
+  LOG_FILE_MAX_SIZE: "20"
+  LOG_FILE_BACKUP_COUNT: "5"
+  LOG_DATEFORMAT: "%Y-%m-%d %H:%M:%S"
+  LOG_TZ: "Asia/Shanghai"
+  DEBUG: "false"
+  FLASK_DEBUG: "false"
+  ENABLE_REQUEST_LOGGING: "false"
+
+  # ===== CORS Configuration =====
+  WEB_API_CORS_ALLOW_ORIGINS: "https://REPLACE-YOUR-DOMAIN.example.com"
+  CONSOLE_CORS_ALLOW_ORIGINS: "https://REPLACE-YOUR-DOMAIN.example.com"
+
+  # ===== Security Settings =====
+  FILES_ACCESS_TIMEOUT: "300"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+  REFRESH_TOKEN_EXPIRE_DAYS: "30"
+  APP_DEFAULT_ACTIVE_REQUESTS: "0"
+  APP_MAX_ACTIVE_REQUESTS: "0"
+  APP_MAX_EXECUTION_TIME: "1200"
+  CHECK_UPDATE_URL: "https://updates.dify.ai"
+
+  # ===== Sandbox Configuration =====
+  SANDBOX_HOST: "dify-sandbox"
+  SANDBOX_PORT: "8194"
+  CODE_EXECUTION_ENDPOINT: "http://dify-sandbox:8194"
+  CODE_EXECUTION_API_KEY: ""
+  CODE_MAX_NUMBER: "9223372036854775807"
+  CODE_MIN_NUMBER: "-9223372036854775808"
+  CODE_MAX_DEPTH: "5"
+  CODE_MAX_PRECISION: "20"
+  CODE_MAX_STRING_LENGTH: "80000"
+  CODE_MAX_STRING_ARRAY_LENGTH: "30"
+  CODE_MAX_OBJECT_ARRAY_LENGTH: "30"
+  CODE_MAX_NUMBER_ARRAY_LENGTH: "1000"
+
+  # ===== Plugin Daemon Configuration =====
+  PLUGIN_DAEMON_URL: "http://dify-plugin-daemon:5002"
+  PLUGIN_DAEMON_PORT: "5002"
+  PLUGIN_MAX_PACKAGE_SIZE: "52428800"
+
+  # ===== SSRF Proxy Configuration =====
+  SSRF_PROXY_HTTP_URL: "http://dify-ssrf-proxy:3128"
+  SSRF_PROXY_HTTPS_URL: "http://dify-ssrf-proxy:3128"
+
+  # ===== Observability & Monitoring =====
+  ENABLE_OTEL: "false"
+  OTLP_BASE_ENDPOINT: "http://otel-collector:4318"
+
+  # ===== API Tool Settings =====
+  API_TOOL_DEFAULT_CONNECT_TIMEOUT: "10"
+  API_TOOL_DEFAULT_READ_TIMEOUT: "60"
+
+  # ===== Encoding Settings =====
+  LANG: "C.UTF-8"
+  LC_ALL: "C.UTF-8"
+  PYTHONIOENCODING: "utf-8"
+---
+# ConfigMap for Nginx configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dify-nginx-config
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: nginx
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+      worker_connections 4096;
+      use epoll;
+      multi_accept on;
+    }
+
+    http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+
+      log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+      access_log /var/log/nginx/access.log main;
+      error_log /var/log/nginx/error.log warn;
+
+      sendfile on;
+      tcp_nopush on;
+      tcp_nodelay on;
+      keepalive_timeout 75;
+      types_hash_max_size 2048;
+      client_max_body_size 100M;
+      gzip on;
+      gzip_vary on;
+      gzip_proxied any;
+      gzip_comp_level 6;
+      gzip_types text/plain text/css application/json application/javascript
+                 text/xml application/xml application/xml+rss text/javascript;
+
+      # Upstream definitions
+      upstream dify-api {
+        least_conn;
+        server dify-api:5001;
+        keepalive 32;
+      }
+
+      upstream dify-web {
+        least_conn;
+        server dify-web:3000;
+        keepalive 32;
+      }
+
+      server {
+        listen 80;
+        server_name _;
+
+        # Redirect HTTP to HTTPS
+        return 301 https://$host$request_uri;
+      }
+
+      server {
+        listen 443 ssl http2;
+        server_name REPLACE-YOUR-DOMAIN.example.com;
+
+        ssl_certificate /etc/nginx/ssl/tls.crt;
+        ssl_certificate_key /etc/nginx/ssl/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Frame-Options SAMEORIGIN;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-XSS-Protection "1; mode=block";
+
+        # API routes
+        location /console/api {
+          proxy_pass http://dify-api;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Host $http_host;
+          proxy_http_version 1.1;
+          proxy_set_header Connection "";
+          proxy_buffering off;
+          proxy_read_timeout 3600s;
+          proxy_send_timeout 3600s;
+        }
+
+        location /api {
+          proxy_pass http://dify-api;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Host $http_host;
+          proxy_http_version 1.1;
+          proxy_set_header Connection "";
+          proxy_buffering off;
+          proxy_read_timeout 3600s;
+          proxy_send_timeout 3600s;
+        }
+
+        location /v1 {
+          proxy_pass http://dify-api;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Host $http_host;
+          proxy_http_version 1.1;
+          proxy_set_header Connection "";
+          proxy_buffering off;
+          proxy_read_timeout 3600s;
+          proxy_send_timeout 3600s;
+        }
+
+        location /files {
+          proxy_pass http://dify-api;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Host $http_host;
+          proxy_http_version 1.1;
+          client_max_body_size 100M;
+        }
+
+        # WebApp frontend
+        location / {
+          proxy_pass http://dify-web;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Host $http_host;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+        }
+      }
+    }
+---
+# ConfigMap for PostgreSQL initialization
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dify-postgres-init
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: postgres
+data:
+  init.sql: |
+    -- Create dify database
+    CREATE DATABASE dify;
+    -- Connect to dify database
+    \c dify;
+    -- Enable required extensions
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    -- Grant privileges
+    GRANT ALL PRIVILEGES ON DATABASE dify TO postgres;
+---
+# ConfigMap for Redis configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dify-redis-config
+  namespace: dify
+  labels:
+    app.kubernetes.io/name: dify
+    app.kubernetes.io/component: redis
+data:
+  redis.conf: |
+    # Redis configuration for production
+    bind 0.0.0.0
+    port 6379
+    protected-mode yes
+    # Authentication - requirepass set via env var
+    # Persistence
+    appendonly yes
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    # RDB snapshots
+    save 900 1
+    save 300 10
+    save 60 10000
+    # Memory
+    maxmemory 2gb
+    maxmemory-policy allkeys-lru
+    # Connections
+    maxclients 1000
+    tcp-keepalive 300
+    timeout 0
+    # Logging
+    loglevel notice
+    # Slow log
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
