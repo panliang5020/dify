@@ -163,7 +163,7 @@ class DatasetDocumentSegmentListApi(Resource):
             escaped_keyword = escape_like_pattern(keyword)
             # Search in both content and keywords fields
             # Use database-specific methods for JSON array search
-            if dify_config.SQLALCHEMY_DATABASE_URI_SCHEME == "postgresql":
+            if dify_config.SQLALCHEMY_DATABASE_URI_SCHEME.startswith(("postgresql", "kingbase8")):
                 # PostgreSQL: Use jsonb_array_elements_text to properly handle Unicode/Chinese text
                 keywords_condition = func.array_to_string(
                     func.array(

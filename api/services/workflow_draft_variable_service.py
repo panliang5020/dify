@@ -662,7 +662,7 @@ def _batch_upsert_draft_variable(
     # insert operations instead of the ORM layer.
 
     # Use different insert statements based on database type
-    if dify_config.SQLALCHEMY_DATABASE_URI_SCHEME == "postgresql":
+    if dify_config.SQLALCHEMY_DATABASE_URI_SCHEME.startswith(("postgresql", "kingbase8")):
         stmt = pg_insert(WorkflowDraftVariable).values([_model_to_insertion_dict(v) for v in draft_vars])
         if policy == _UpsertPolicy.OVERWRITE:
             stmt = stmt.on_conflict_do_update(
