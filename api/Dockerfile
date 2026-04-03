@@ -119,11 +119,11 @@ ARG NLTK_DATA_SERVER=""
 RUN mkdir -p /usr/local/share/nltk_data \
     && NLTK_DATA=/usr/local/share/nltk_data NLTK_DATA_SERVER=${NLTK_DATA_SERVER} python -c "\
 import nltk, os; \
-server = os.environ.get('NLTK_DATA_SERVER', ''); \
-kwargs = {'download_dir': '/usr/local/share/nltk_data', 'quiet': False, **({'url': server} if server else {})}; \
-nltk.download('punkt', **kwargs); \
-nltk.download('averaged_perceptron_tagger', **kwargs); \
-nltk.download('stopwords', **kwargs)" \
+server = os.environ.get('NLTK_DATA_SERVER') or None; \
+d = nltk.downloader.Downloader(server_index_url=server); \
+d.download('punkt', download_dir='/usr/local/share/nltk_data', quiet=False); \
+d.download('averaged_perceptron_tagger', download_dir='/usr/local/share/nltk_data', quiet=False); \
+d.download('stopwords', download_dir='/usr/local/share/nltk_data', quiet=False)" \
     && chmod -R 755 /usr/local/share/nltk_data
 
 ENV TIKTOKEN_CACHE_DIR=/app/api/.tiktoken_cache
