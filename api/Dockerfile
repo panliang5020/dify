@@ -114,7 +114,7 @@ ARG NO_PROXY=""
 
 # Download nltk data
 # Optional: set a custom NLTK data server to speed up downloads in restricted networks.
-# Example for a self-hosted mirror: --build-arg NLTK_DATA_SERVER=http://my-mirror/nltk_data
+# Recommended mirror for China: --build-arg NLTK_DATA_SERVER=https://mirrors.tuna.tsinghua.edu.cn/nltk_data/
 ARG NLTK_DATA_SERVER=""
 RUN mkdir -p /usr/local/share/nltk_data \
     && NLTK_DATA=/usr/local/share/nltk_data NLTK_DATA_SERVER=${NLTK_DATA_SERVER} python -c "\
