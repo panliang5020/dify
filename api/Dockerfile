@@ -120,8 +120,7 @@ RUN mkdir -p /usr/local/share/nltk_data \
     && NLTK_DATA=/usr/local/share/nltk_data NLTK_DATA_SERVER=${NLTK_DATA_SERVER} python -c "\
 import nltk, os; \
 server = os.environ.get('NLTK_DATA_SERVER', ''); \
-kwargs = {'download_dir': '/usr/local/share/nltk_data', 'quiet': False}; \
-if server: kwargs['url'] = server; \
+kwargs = {'download_dir': '/usr/local/share/nltk_data', 'quiet': False, **({'url': server} if server else {})}; \
 nltk.download('punkt', **kwargs); \
 nltk.download('averaged_perceptron_tagger', **kwargs); \
 nltk.download('stopwords', **kwargs)" \
