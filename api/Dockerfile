@@ -23,7 +23,18 @@ RUN apt-get update \
 
 # Install Python dependencies
 COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-dev
+# Optional: set a custom PyPI index URL to speed up installation in restricted networks
+# Example for China: --build-arg UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG UV_INDEX_URL=""
+# HTTP_PROXY/HTTPS_PROXY ARGs are automatically exposed as env vars in RUN steps,
+# so uv (and curl) will pick them up when they are non-empty.
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+RUN if [ -n "${UV_INDEX_URL}" ]; then \
+        uv sync --locked --no-dev --index-url "${UV_INDEX_URL}"; \
+    else \
+        uv sync --locked --no-dev; \
+    fi
 
 # production stage
 FROM base AS production
@@ -95,9 +106,25 @@ ENV VIRTUAL_ENV=/app/api/.venv
 COPY --from=packages --chown=dify:dify ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
+# Proxy settings for network downloads (useful in restricted network environments such as China).
+# Pass at build time with: --build-arg HTTPS_PROXY=http://proxy:port
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY=""
+
 # Download nltk data
+# Optional: set a custom NLTK data server to speed up downloads in restricted networks.
+# Example for a self-hosted mirror: --build-arg NLTK_DATA_SERVER=http://my-mirror/nltk_data
+ARG NLTK_DATA_SERVER=""
 RUN mkdir -p /usr/local/share/nltk_data \
-    && NLTK_DATA=/usr/local/share/nltk_data python -c "import nltk; nltk.download('punkt'); nltk.download('averaged_perceptron_tagger'); nltk.download('stopwords')" \
+    && NLTK_DATA=/usr/local/share/nltk_data NLTK_DATA_SERVER=${NLTK_DATA_SERVER} python -c "\
+import nltk, os; \
+server = os.environ.get('NLTK_DATA_SERVER', ''); \
+kwargs = {'download_dir': '/usr/local/share/nltk_data', 'quiet': False}; \
+if server: kwargs['url'] = server; \
+nltk.download('punkt', **kwargs); \
+nltk.download('averaged_perceptron_tagger', **kwargs); \
+nltk.download('stopwords', **kwargs)" \
     && chmod -R 755 /usr/local/share/nltk_data
 
 ENV TIKTOKEN_CACHE_DIR=/app/api/.tiktoken_cache
