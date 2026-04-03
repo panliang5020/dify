@@ -47,6 +47,7 @@ from extensions.ext_database import db
 from factories import file_factory
 from libs.flask_utils import preserve_flask_contexts
 from models import Account, App, Conversation, EndUser, Message, Workflow, WorkflowNodeExecutionTriggeredFrom
+from models.base import Base, TypeBase
 from models.enums import WorkflowRunTriggeredFrom
 from services.conversation_service import ConversationService
 from services.workflow_draft_variable_service import (
@@ -690,7 +691,7 @@ class AdvancedChatAppGenerator(MessageBasedAppGenerator):
                 raise e
 
 
-_T = TypeVar("_T")
+_T = TypeVar("_T", bound=Union[Base, TypeBase])
 
 
 def _refresh_model(session, model: _T) -> _T:

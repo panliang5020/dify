@@ -114,16 +114,29 @@ ARG NO_PROXY=""
 
 # Download nltk data
 # Optional: set a custom NLTK data server to speed up downloads in restricted networks.
-# Recommended mirror for China: --build-arg NLTK_DATA_SERVER=https://mirrors.tuna.tsinghua.edu.cn/nltk_data/
+# The value must be the URL of an NLTK-format index.xml, e.g.:
+#   --build-arg NLTK_DATA_SERVER=https://mirrors.tuna.tsinghua.edu.cn/nltk_data/index.xml
+# If the custom server is unreachable or returns invalid data the build will
+# automatically fall back to the official NLTK server with a warning.
 ARG NLTK_DATA_SERVER=""
 RUN mkdir -p /usr/local/share/nltk_data \
-    && NLTK_DATA=/usr/local/share/nltk_data NLTK_DATA_SERVER=${NLTK_DATA_SERVER} python -c "\
-import nltk, os; \
-server = os.environ.get('NLTK_DATA_SERVER') or None; \
-d = nltk.downloader.Downloader(server_index_url=server); \
-d.download('punkt', download_dir='/usr/local/share/nltk_data', quiet=False); \
-d.download('averaged_perceptron_tagger', download_dir='/usr/local/share/nltk_data', quiet=False); \
-d.download('stopwords', download_dir='/usr/local/share/nltk_data', quiet=False)" \
+    && printf '%s\n' \
+        'import nltk, os, sys' \
+        'server = os.environ.get("NLTK_DATA_SERVER") or None' \
+        'pkgs = ["punkt", "averaged_perceptron_tagger", "stopwords"]' \
+        'dl = "/usr/local/share/nltk_data"' \
+        'def run(d):' \
+        '    for p in pkgs: d.download(p, download_dir=dl, quiet=False, raise_on_error=True)' \
+        'try:' \
+        '    run(nltk.downloader.Downloader(server_index_url=server))' \
+        'except Exception as e:' \
+        '    if server:' \
+        '        print("Warning: NLTK_DATA_SERVER failed (%s: %s), using default" % (type(e).__name__, e), file=sys.stderr)' \
+        '        run(nltk.downloader.Downloader())' \
+        '    else: raise' \
+        > /tmp/nltk_dl.py \
+    && NLTK_DATA=/usr/local/share/nltk_data NLTK_DATA_SERVER=${NLTK_DATA_SERVER} python /tmp/nltk_dl.py \
+    && rm /tmp/nltk_dl.py \
     && chmod -R 755 /usr/local/share/nltk_data
 
 ENV TIKTOKEN_CACHE_DIR=/app/api/.tiktoken_cache
