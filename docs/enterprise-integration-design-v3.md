@@ -882,7 +882,7 @@ CREATE TABLE gva_enterprise.token_quota (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     subject_type    VARCHAR(20) NOT NULL,      -- ORG / USER / APP
     subject_id      UUID NOT NULL,
-    quota_type      VARCHAR(20) NOT NULL,      -- MONTHLY / DAILY / TOTAL
+    quota_type      VARCHAR(20) NOT NULL,      -- PERIOD_MONTHLY / PERIOD_DAILY / LIFETIME
     token_limit     BIGINT NOT NULL,           -- 配额上限
     token_used      BIGINT DEFAULT 0,          -- 已使用
     period_start    TIMESTAMPTZ,               -- 周期开始
@@ -1216,6 +1216,7 @@ CREATE TABLE gva_enterprise.tenants (
     resource_limits JSONB DEFAULT '{}',        -- 资源限制
     contact_email   VARCHAR(255),
     contact_name    VARCHAR(100),
+    trial_starts_at TIMESTAMPTZ,
     trial_ends_at   TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
@@ -1548,8 +1549,8 @@ Phase 7 (第26-29周)  ██████████████  模块G: 灾�
 | E - 通知中心 | 22d | 14.4% |
 | F - 多租户管理 | 11.5d | 7.5% |
 | G - 灾备高可用 | 12.5d | 8.2% |
-| 联调 + Buffer | ~5d | 约 0.5% |
-| **总计** | **~153d** | **约 31 周** |
+| 联调 + Buffer | ~5d | 3.3% |
+| **总计** | **~158d** | **约 32 周** |
 
 **推荐团队配置**：3-4 名全栈工程师，预计 8-10 个月完成
 
